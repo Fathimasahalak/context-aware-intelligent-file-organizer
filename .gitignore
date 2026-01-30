@@ -1,0 +1,15 @@
+# Database files
+data/*.db
+
+# ML cache
+data/*.npy
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# OS files
+.DS_Store

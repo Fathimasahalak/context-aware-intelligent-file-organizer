@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 from database import get_connection
+from text_extractor import get_searchable_text
 
 open_sessions = {}
 
@@ -13,9 +14,10 @@ def start_file_session(file_path):
     row = cur.fetchone()
 
     if row is None:
+        searchable_text = get_searchable_text(file_path)
         cur.execute(
-            "INSERT INTO files(path, access_count, total_time, last_opened) VALUES (?,0,0,?)",
-            (file_path, datetime.now().isoformat())
+            "INSERT INTO files(path, access_count, total_time, last_opened, searchable_text) VALUES (?,0,0,?,?)",
+            (file_path, datetime.now().isoformat(), searchable_text)
         )
         file_id = cur.lastrowid
     else:

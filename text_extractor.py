@@ -1,6 +1,9 @@
 import os
 import pdfplumber
 
+# File extensions that should have full content indexed
+DOCUMENT_EXTENSIONS = {'.pdf', '.txt', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv'}
+
 
 def extract_text_from_pdf(path):
     if not path.lower().endswith(".pdf"):
@@ -21,7 +24,15 @@ def clean_filename_text(path):
 
 
 def get_searchable_text(path):
+    _, ext = os.path.splitext(path)
+    
+    # Only index document files
+    if ext.lower() not in DOCUMENT_EXTENSIONS:
+        return ""
+    
+    # Include filename + extension + content for better searchability
     filename_text = clean_filename_text(path)
+    ext_text = ext.lower().replace('.', '')  # "pdf", "docx", etc.
     pdf_text = extract_text_from_pdf(path)
-    combined_text = f"{filename_text} {pdf_text}"
+    combined_text = f"{filename_text} {ext_text} {pdf_text}"
     return combined_text.strip()

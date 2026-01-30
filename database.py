@@ -19,9 +19,10 @@ def init_db():
         path TEXT UNIQUE,
         access_count INTEGER DEFAULT 0,
         total_time INTEGER DEFAULT 0,
-        last_opened TEXT
-
-
+        last_opened TEXT,
+        cluster_id INTEGER,
+        cluster_label TEXT,
+        searchable_text TEXT
     )
     """)
 

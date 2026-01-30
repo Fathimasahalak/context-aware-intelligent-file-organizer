@@ -12,8 +12,6 @@ ID_CACHE = os.path.join("data", "file_ids.npy")
 
 class SemanticSearch:
     def __init__(self):
-        self.conn = sqlite3.connect(DB_PATH)
-        self.cur = self.conn.cursor()
         self.model = None
         self.file_ids = []
         self.file_paths = []
@@ -24,13 +22,18 @@ class SemanticSearch:
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
 
     def load_files(self):
-        self.cur.execute("""
-            SELECT id, path, searchable_text 
-            FROM files 
-            WHERE searchable_text IS NOT NULL
-            ORDER BY id ASC
-        """)
-        rows = self.cur.fetchall()
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                SELECT id, path, searchable_text 
+                FROM files 
+                WHERE searchable_text IS NOT NULL AND searchable_text != ''
+                ORDER BY id ASC
+            """)
+            rows = cur.fetchall()
+        finally:
+            conn.close()
 
         self.file_ids = [r[0] for r in rows]
         self.file_paths = [r[1] for r in rows]
@@ -76,11 +79,16 @@ class SemanticSearch:
         np.save(EMBEDDING_CACHE, self.vectors)
 
     def search(self, query, top_k=10):
-        if self.vectors is None:
+        if self.vectors is None or len(self.file_ids) == 0:
             return []
 
         self.load_model()
         query_vec = self.model.encode([query])
+        
+        # Handle case where vectors might be 1D (empty case)
+        if len(self.vectors.shape) == 1:
+            return []
+        
         similarities = cosine_similarity(query_vec, self.vectors)[0]
 
         top_indices = np.argsort(similarities)[::-1][:top_k]

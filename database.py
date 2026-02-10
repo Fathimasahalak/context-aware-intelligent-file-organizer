@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join("data", "file_logs.db")
+from config import DB_PATH
 print("USING DATABASE:", os.path.abspath(DB_PATH))
 
 

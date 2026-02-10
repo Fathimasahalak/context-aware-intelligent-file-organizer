@@ -2,7 +2,7 @@ import os
 import pdfplumber
 
 # File extensions that should have full content indexed
-DOCUMENT_EXTENSIONS = {'.pdf', '.txt', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv'}
+from config import DOCUMENT_EXTENSIONS, MAX_PDF_PAGES
 
 
 def extract_text_from_pdf(path):
@@ -10,7 +10,9 @@ def extract_text_from_pdf(path):
         return ""
     try:
         with pdfplumber.open(path) as pdf:
-            pages_text = [page.extract_text() or "" for page in pdf.pages]
+            # Limit pages to prevent freezing on large files
+            pages = pdf.pages[:MAX_PDF_PAGES]
+            pages_text = [page.extract_text() or "" for page in pages]
         return "\n".join(pages_text)
     except Exception as e:
         print(f"Error reading PDF {path}: {e}")

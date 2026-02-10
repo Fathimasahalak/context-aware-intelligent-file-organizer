@@ -5,24 +5,25 @@ import sqlite3
 import os
 
 
-DB_PATH = os.path.join("data", "file_logs.db")
+from config import DB_PATH
 EMBEDDING_CACHE = os.path.join("data", "file_embeddings.npy")
 ID_CACHE = os.path.join("data", "file_ids.npy")
 
 
 class SemanticSearch:
-    def __init__(self):
+    def __init__(self, db_path=None):
         self.model = None
         self.file_ids = []
         self.file_paths = []
         self.vectors = None
+        self.db_path = db_path or DB_PATH
 
     def load_model(self):
         if self.model is None:
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
 
     def load_files(self):
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         try:
             cur.execute("""
@@ -52,6 +53,27 @@ class SemanticSearch:
         cached_ids = np.load(ID_CACHE).tolist()
         cached_vectors = np.load(EMBEDDING_CACHE)
 
+        # CRITICAL FIX: Remove deleted files from cache
+        # Build set of current file IDs from database
+        current_ids_set = set(self.file_ids)
+        
+        # Find indices of cached entries that still exist
+        valid_indices = []
+        valid_ids = []
+        for i, cached_id in enumerate(cached_ids):
+            if cached_id in current_ids_set:
+                valid_indices.append(i)
+                valid_ids.append(cached_id)
+        
+        # Filter cached vectors to only valid entries
+        if valid_indices:
+            cached_ids = valid_ids
+            cached_vectors = cached_vectors[valid_indices]
+        else:
+            # All cached entries are stale, start fresh
+            cached_ids = []
+            cached_vectors = np.array([])
+
         # Detect new files
         new_entries = []
         new_texts = []
@@ -67,7 +89,10 @@ class SemanticSearch:
             new_vectors = self.model.encode(new_texts, show_progress_bar=True)
 
             cached_ids.extend(new_entries)
-            cached_vectors = np.vstack([cached_vectors, new_vectors])
+            if len(cached_vectors) > 0:
+                cached_vectors = np.vstack([cached_vectors, new_vectors])
+            else:
+                cached_vectors = new_vectors
 
             np.save(ID_CACHE, np.array(cached_ids))
             np.save(EMBEDDING_CACHE, cached_vectors)
@@ -95,10 +120,36 @@ class SemanticSearch:
 
         results = []
         for idx in top_indices:
-            results.append({
-                "file_id": self.file_ids[idx],
-                "path": self.file_paths[idx],
-                "score": float(similarities[idx])
-            })
+            # Safety check: ensure index is within bounds
+            if idx < len(self.file_ids) and idx < len(self.file_paths):
+                results.append({
+                    "file_id": self.file_ids[idx],
+                    "path": self.file_paths[idx],
+                    "score": float(similarities[idx])
+                })
 
         return results
+
+    def remove_file(self, file_path):
+        """Remove a file from the index in-memory (fast)"""
+        if file_path not in self.file_paths:
+            return
+            
+        try:
+            # simple O(N) lookup, fine for <100k files
+            idx = self.file_paths.index(file_path)
+            
+            # Remove from lists
+            del self.file_ids[idx]
+            del self.file_paths[idx]
+            
+            # Remove from vectors (numpy delete is O(N))
+            if self.vectors is not None:
+                self.vectors = np.delete(self.vectors, idx, axis=0)
+                
+            # Update cache on disk so next load is correct
+            self.save_cache()
+            print(f"Removed {os.path.basename(file_path)} from index.")
+            
+        except Exception as e:
+            print(f"Error removing file from index: {e}")

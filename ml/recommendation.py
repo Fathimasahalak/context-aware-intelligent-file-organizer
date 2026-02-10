@@ -58,19 +58,21 @@ def get_smart_priority_files(limit=20):
     if last_file_id in id_to_idx:
         context_idx = id_to_idx[last_file_id]
         
-        # Safety check: ensure index is valid
-        if context_idx < len(searcher.vectors) and len(searcher.vectors) > 0:
+        # Safety check: ensure index is valid and vectors exist
+        if searcher.vectors is not None and len(searcher.vectors) > 0 and context_idx < len(searcher.vectors):
             context_vector = searcher.vectors[context_idx]
             
             # Calculate similarities for all files
             # Reshape for single sample
             similarities = cosine_similarity([context_vector], searcher.vectors)[0]
         else:
-            # Index out of bounds, use zeros
-            similarities = np.zeros(len(searcher.vectors)) if len(searcher.vectors) > 0 else np.zeros(1)
+            # Index out of bounds or no vectors, use zeros
+            num_vectors = len(searcher.vectors) if searcher.vectors is not None else 1
+            similarities = np.zeros(num_vectors)
     else:
         # Fallback if last file has no embedding (e.g. image or too new)
-        similarities = np.zeros(len(searcher.vectors)) if len(searcher.vectors) > 0 else np.zeros(1)
+        num_vectors = len(searcher.vectors) if searcher.vectors is not None else 1
+        similarities = np.zeros(num_vectors)
 
     # 4. Calculate Scores
     scores = []

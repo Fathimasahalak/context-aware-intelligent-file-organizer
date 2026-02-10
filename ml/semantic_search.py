@@ -3,6 +3,15 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 import sqlite3
 import os
+import logging
+
+# Silence verbose BERT loading logs
+logging.getLogger("sentence_transformers").setLevel(logging.INFO) # Allow some info logs
+logging.getLogger("transformers").setLevel(logging.WARNING) # Only show warnings/errors
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Global singleton for the model to prevent re-loading
+_shared_model = None
 
 
 from config import DB_PATH
@@ -19,8 +28,16 @@ class SemanticSearch:
         self.db_path = db_path or DB_PATH
 
     def load_model(self):
-        if self.model is None:
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        global _shared_model
+        if _shared_model is None:
+            try:
+                print("Loading AI model (BERT)... this may take a few seconds.")
+                _shared_model = SentenceTransformer('all-MiniLM-L6-v2')
+                print("Model loaded successfully.")
+            except Exception as e:
+                print(f"FAILED to load AI model: {e}")
+                raise e
+        self.model = _shared_model
 
     def load_files(self):
         conn = sqlite3.connect(self.db_path)
@@ -36,15 +53,18 @@ class SemanticSearch:
         finally:
             conn.close()
 
+        if not rows:
+            self.vectors = np.array([])
+            return
+
         self.file_ids = [r[0] for r in rows]
         self.file_paths = [r[1] for r in rows]
         texts = [r[2] for r in rows]
 
-        self.load_model()
-
         # No cache → compute all
         if not os.path.exists(EMBEDDING_CACHE) or not os.path.exists(ID_CACHE):
             print("No embedding cache found. Computing all...")
+            self.load_model() # Only load if we need to encode
             self.vectors = self.model.encode(texts, show_progress_bar=True)
             self.save_cache()
             return
@@ -86,6 +106,7 @@ class SemanticSearch:
         # Append new embeddings
         if new_entries:
             print(f"Embedding {len(new_entries)} new files...")
+            self.load_model() # Ensure model is ready for encoding
             new_vectors = self.model.encode(new_texts, show_progress_bar=True)
 
             cached_ids.extend(new_entries)

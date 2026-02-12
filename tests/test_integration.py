@@ -1,6 +1,6 @@
 """
 Comprehensive End-to-End Integration Test
-Tests the entire file organizer workflow
+Tests the entire FileSense workflow
 """
 import sys
 import os

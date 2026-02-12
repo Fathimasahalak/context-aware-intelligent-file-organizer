@@ -92,10 +92,16 @@ class SemanticSearch:
             self.file_paths = self.file_paths[-MAX_CACHE_FILES:]
             texts = texts[-MAX_CACHE_FILES:]
 
+        model = self.get_model()
+        if model is None:
+            logging.error("Semantic model not available, skipping embedding.")
+            self.vectors = np.array([])
+            return
+
         # No cache → compute all
         if not os.path.exists(EMBEDDING_CACHE) or not os.path.exists(ID_CACHE):
             logging.info("No embedding cache found. Computing all...")
-            self.vectors = self.get_model().encode(texts, show_progress_bar=True)
+            self.vectors = model.encode(texts, show_progress_bar=True)
             self.save_cache()
             return
 
@@ -136,7 +142,7 @@ class SemanticSearch:
         # Append new embeddings
         if new_entries:
             logging.info(f"Embedding {len(new_entries)} new files...")
-            new_vectors = self.get_model().encode(new_texts, show_progress_bar=True)
+            new_vectors = model.encode(new_texts, show_progress_bar=True)
 
             cached_ids.extend(new_entries)
             if len(cached_vectors) > 0:
@@ -157,7 +163,11 @@ class SemanticSearch:
         if self.vectors is None or len(self.file_ids) == 0:
             return []
 
-        query_vec = self.get_model().encode([query])
+        model = self.get_model()
+        if model is None:
+            return []
+
+        query_vec = model.encode([query])
         
         # Handle case where vectors might be 1D (empty case)
         if len(self.vectors.shape) == 1:
@@ -181,27 +191,30 @@ class SemanticSearch:
 
     def remove_file(self, file_path):
         """Remove a file from the index in-memory (fast)"""
-        if file_path not in self.file_paths:
+        # Normalize path for comparison
+        file_path = os.path.normpath(os.path.abspath(file_path))
+        
+        # Normalize all paths in self.file_paths for comparison
+        norm_paths = [os.path.normpath(os.path.abspath(p)) for p in self.file_paths]
+        
+        if file_path not in norm_paths:
+            logging.debug(f"File {file_path} not found in semantic index.")
             return
             
         try:
-            # simple O(N) lookup, fine for <100k files
-            idx = self.file_paths.index(file_path)
+            idx = norm_paths.index(file_path)
             
             # Remove from lists
             del self.file_ids[idx]
             del self.file_paths[idx]
             
-            # Remove from vectors (numpy delete is O(N))
-            if self.vectors is not None:
+            # Remove from vectors
+            if self.vectors is not None and len(self.vectors) > idx:
                 self.vectors = np.delete(self.vectors, idx, axis=0)
                 
-            # Update cache on disk so next load is correct
+            # Update cache on disk
             self.save_cache()
-            
-            # Reload to ensure consistency with DB
-            self.load_files()
-            logging.info(f"Removed {os.path.basename(file_path)} from index.")
+            logging.info(f"Removed {os.path.basename(file_path)} from semantic index.")
             
         except Exception as e:
             logging.error(f"Error removing file from index: {e}")

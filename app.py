@@ -4,6 +4,8 @@ import os
 import threading
 import time
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime
 
 from database import init_db
@@ -26,48 +28,58 @@ except Exception as e:
     import sys
     sys.exit(1)
 
-# Modern File Manager Color Scheme
-SIDEBAR_BG = "#1E1E1E"
-MAIN_BG = "#252525"
-CONTENT_BG = "#2B2B2B"
-HOVER_BG = "#3C3C3C"
-SELECTED_BG = "#0E639C"
-BORDER_COLOR = "#3E3E3E"
-TEXT_PRIMARY = "#FFFFFF"
-TEXT_SECONDARY = "#A0A0A0"
-ACCENT_COLOR = "#0078D4"
-DELETE_COLOR = "#E81123"
+# Material Design 3 - Ocean Theme (Dark)
+SURFACE = "#0B141A"           # Deep Ocean Background
+SURFACE_CONTAINER = "#15202B"  # Tonal Indigo Sidebar/Cards
+SURFACE_CONTAINER_HIGH = "#1E2D3D" 
+PRIMARY = "#4FD1C5"            # Vibrant Teal accent
+ON_PRIMARY = "#003735"
+PRIMARY_CONTAINER = "#00504D"
+ON_PRIMARY_CONTAINER = "#80F2E7"
+SECONDARY_CONTAINER = "#2D3748"
+ON_SECONDARY_CONTAINER = "#E2E8F0"
+OUTLINE = "#4A5568"
+ERROR = "#FF8A80"              # Soft Coral for Delete
+TEXT_PRIMARY = "#F7FAFC"
+TEXT_SECONDARY = "#A0AEC0"
 
-# Typography
-TITLE_FONT = ("Segoe UI", 18, "bold")
-HEADER_FONT = ("Segoe UI", 14, "bold")
-BODY_FONT = ("Segoe UI", 11)
-SMALL_FONT = ("Segoe UI", 10)
+# Material 3 Typography
+TITLE_FONT = ("Segoe UI", 24, "bold")
+HEADER_FONT = ("Segoe UI", 16, "bold")
+BODY_FONT = ("Segoe UI", 12)
+SMALL_FONT = ("Segoe UI", 11)
+
+# Material 3 Shapes
+RADIUS_LG = 28  # FABs, Search Bars, Main Containers
+RADIUS_MD = 16  # Sidebars, Large Cards
+RADIUS_SM = 12  # Buttons, Rows, Input fields
 
 # File type icons
 FILE_ICONS = {
-    ".pdf": "📄",
-    ".doc": "📝",
-    ".docx": "📝",
-    ".txt": "📃",
-    ".xls": "📊",
-    ".xlsx": "📊",
-    ".ppt": "📊",
-    ".pptx": "📊",
-    ".jpg": "🖼️",
-    ".png": "🖼️",
-    ".gif": "🖼️",
-    ".zip": "📦",
-    ".rar": "📦",
-    "default": "📄"
+    ".pdf": "📄", ".doc": "📝", ".docx": "📝", ".txt": "📃",
+    ".xls": "📊", ".xlsx": "📊", ".ppt": "📊", ".pptx": "📊",
+    ".jpg": "🖼️", ".png": "🖼️", ".gif": "🖼️", ".zip": "📦",
+    ".rar": "📦", "default": "📄"
 }
 
+def open_path(path):
+    """Cross-platform path opening"""
+    try:
+        if sys.platform == 'win32':
+            os.startfile(path)
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except Exception as e:
+        logging.error(f"Failed to open path {path}: {e}")
+        raise e
 
 class ModernFileManager(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("📁 Smart File Organizer")
+        self.title("📁 FileSense")
         self.geometry("1200x750")
         self.minsize(1000, 600)
 
@@ -98,14 +110,14 @@ class ModernFileManager(ctk.CTk):
         """Build the modern file manager UI"""
         
         # Main container
-        main_container = ctk.CTkFrame(self, fg_color=MAIN_BG)
+        main_container = ctk.CTkFrame(self, fg_color=SURFACE)
         main_container.pack(fill="both", expand=True)
         
         # Sidebar
         self.build_sidebar(main_container)
         
         # Content area
-        content_frame = ctk.CTkFrame(main_container, fg_color=MAIN_BG)
+        content_frame = ctk.CTkFrame(main_container, fg_color=SURFACE)
         content_frame.pack(side="left", fill="both", expand=True)
         
         # Toolbar
@@ -119,7 +131,7 @@ class ModernFileManager(ctk.CTk):
 
     def build_sidebar(self, parent):
         """Build left sidebar navigation"""
-        sidebar = ctk.CTkFrame(parent, fg_color=SIDEBAR_BG, width=220, corner_radius=0)
+        sidebar = ctk.CTkFrame(parent, fg_color=SURFACE_CONTAINER, width=220, corner_radius=0)
         sidebar.pack(side="left", fill="y", padx=0, pady=0)
         sidebar.pack_propagate(False)
         
@@ -129,7 +141,7 @@ class ModernFileManager(ctk.CTk):
         
         title = ctk.CTkLabel(
             title_frame, 
-            text="📁 File Organizer", 
+            text="📁 FileSense", 
             font=TITLE_FONT,
             text_color=TEXT_PRIMARY
         )
@@ -157,7 +169,7 @@ class ModernFileManager(ctk.CTk):
         )
         
         # Divider
-        divider = ctk.CTkFrame(sidebar, fg_color=BORDER_COLOR, height=1)
+        divider = ctk.CTkFrame(sidebar, fg_color=OUTLINE, height=1)
         divider.pack(fill="x", padx=15, pady=20)
         
         # Actions
@@ -174,11 +186,12 @@ class ModernFileManager(ctk.CTk):
             sidebar,
             text="➕ Add File",
             command=self.open_file,
-            fg_color=ACCENT_COLOR,
-            hover_color="#106EBE",
+            fg_color=PRIMARY,
+            text_color=ON_PRIMARY,
+            hover_color=ON_PRIMARY_CONTAINER,
             height=40,
             font=BODY_FONT,
-            corner_radius=6
+            corner_radius=RADIUS_SM
         )
         self.add_btn.pack(fill="x", padx=15, pady=5)
         
@@ -189,11 +202,11 @@ class ModernFileManager(ctk.CTk):
             command=self.refresh_clusters,
             fg_color="transparent",
             border_width=1,
-            border_color=BORDER_COLOR,
-            hover_color=HOVER_BG,
+            border_color=OUTLINE,
+            hover_color=SURFACE_CONTAINER_HIGH,
             height=40,
             font=BODY_FONT,
-            corner_radius=6
+            corner_radius=RADIUS_SM
         )
         refresh_btn.pack(fill="x", padx=15, pady=5)
 
@@ -204,18 +217,18 @@ class ModernFileManager(ctk.CTk):
             text=text,
             command=lambda: self.switch_view(view_name),
             fg_color="transparent",
-            hover_color=HOVER_BG,
+            hover_color=SURFACE_CONTAINER_HIGH,
             anchor="w",
             height=40,
             font=BODY_FONT,
-            corner_radius=6
+            corner_radius=RADIUS_SM
         )
         btn.pack(fill="x", pady=2)
         return btn
 
     def build_toolbar(self, parent):
         """Build top toolbar"""
-        toolbar = ctk.CTkFrame(parent, fg_color=CONTENT_BG, height=60, corner_radius=0)
+        toolbar = ctk.CTkFrame(parent, fg_color=SURFACE_CONTAINER, height=60, corner_radius=0)
         toolbar.pack(fill="x", padx=0, pady=0)
         toolbar.pack_propagate(False)
         
@@ -238,8 +251,9 @@ class ModernFileManager(ctk.CTk):
             width=300,
             height=35,
             font=BODY_FONT,
-            fg_color=MAIN_BG,
-            border_color=BORDER_COLOR
+            fg_color=SURFACE,
+            border_color=OUTLINE,
+            corner_radius=RADIUS_LG
         )
         self.search_entry.pack(side="left", padx=(0, 10))
         self.search_entry.bind("<Return>", lambda e: self.perform_search())
@@ -251,26 +265,28 @@ class ModernFileManager(ctk.CTk):
             width=80,
             height=35,
             font=BODY_FONT,
-            fg_color=ACCENT_COLOR,
-            hover_color="#106EBE"
+            fg_color=PRIMARY,
+            text_color=ON_PRIMARY,
+            hover_color=ON_PRIMARY_CONTAINER,
+            corner_radius=RADIUS_LG
         )
         search_btn.pack(side="left")
 
     def build_file_list(self, parent):
         """Build file list area"""
-        list_container = ctk.CTkFrame(parent, fg_color=MAIN_BG)
+        list_container = ctk.CTkFrame(parent, fg_color=SURFACE)
         list_container.pack(fill="both", expand=True, padx=0, pady=0)
         
         # Scrollable container for headers and rows
         self.file_list_frame = ctk.CTkScrollableFrame(
             list_container,
-            fg_color=MAIN_BG,
+            fg_color=SURFACE,
             corner_radius=0
         )
         self.file_list_frame.pack(fill="both", expand=True, padx=0, pady=0)
         
         # Column headers inside scrollable (tagged to preserve during clear)
-        headers_frame = ctk.CTkFrame(self.file_list_frame, fg_color=CONTENT_BG, height=40, corner_radius=0)
+        headers_frame = ctk.CTkFrame(self.file_list_frame, fg_color=SURFACE_CONTAINER, height=40, corner_radius=0)
         headers_frame.pack(fill="x", padx=0, pady=(0, 5))
         headers_frame.pack_propagate(False)
         headers_frame._is_header = True
@@ -295,7 +311,7 @@ class ModernFileManager(ctk.CTk):
 
     def build_status_bar(self, parent):
         """Build bottom status bar"""
-        status_bar = ctk.CTkFrame(parent, fg_color=CONTENT_BG, height=35, corner_radius=0)
+        status_bar = ctk.CTkFrame(parent, fg_color=SURFACE_CONTAINER, height=35, corner_radius=0)
         status_bar.pack(fill="x", padx=0, pady=0, side="bottom")
         status_bar.pack_propagate(False)
         
@@ -322,9 +338,9 @@ class ModernFileManager(ctk.CTk):
         # Update nav button styles
         for name, btn in self.nav_buttons.items():
             if name == view_name:
-                btn.configure(fg_color=SELECTED_BG)
+                btn.configure(fg_color=PRIMARY_CONTAINER, text_color=ON_PRIMARY_CONTAINER)
             else:
-                btn.configure(fg_color="transparent")
+                btn.configure(fg_color="transparent", text_color=TEXT_PRIMARY)
         
         # Update view title
         titles = {
@@ -500,14 +516,14 @@ class ModernFileManager(ctk.CTk):
         
         # Determine selection color
         is_selected = path in self.selected_files
-        fg_color = SELECTED_BG if is_selected else "transparent"
+        fg_color = PRIMARY_CONTAINER if is_selected else "transparent"
         
         # File row container
         row = ctk.CTkFrame(
             self.file_list_frame,
             fg_color=fg_color,
             height=50,
-            corner_radius=6
+            corner_radius=RADIUS_SM
         )
         row.pack(fill="x", padx=10, pady=2)
         row.pack_propagate(False)
@@ -515,7 +531,7 @@ class ModernFileManager(ctk.CTk):
         # Hover effect - preserve selection color
         def on_enter(e):
             if path not in self.selected_files:
-                row.configure(fg_color=HOVER_BG)
+                row.configure(fg_color=SURFACE_CONTAINER_HIGH)
         
         def on_leave(e):
             if path not in self.selected_files:
@@ -532,7 +548,7 @@ class ModernFileManager(ctk.CTk):
                     row.configure(fg_color="transparent")
                 else:
                     self.selected_files.add(path)
-                    row.configure(fg_color=SELECTED_BG)
+                    row.configure(fg_color=PRIMARY_CONTAINER)
             else:
                 # Single select - clear others
                 self.selected_files.clear()
@@ -604,7 +620,7 @@ class ModernFileManager(ctk.CTk):
             width=30,
             height=30,
             fg_color="transparent",
-            hover_color=HOVER_BG,
+            hover_color=SURFACE_CONTAINER_HIGH,
             font=BODY_FONT
         )
         folder_btn.place(relx=0.85, rely=0.5, anchor="w")
@@ -617,7 +633,7 @@ class ModernFileManager(ctk.CTk):
             width=30,
             height=30,
             fg_color="transparent",
-            hover_color=DELETE_COLOR,
+            hover_color=ERROR,
             font=BODY_FONT
         )
         delete_btn.place(relx=0.91, rely=0.5, anchor="w")
@@ -627,9 +643,9 @@ class ModernFileManager(ctk.CTk):
         # Cluster header
         header = ctk.CTkFrame(
             self.file_list_frame,
-            fg_color=CONTENT_BG,
+            fg_color=SURFACE_CONTAINER,
             height=45,
-            corner_radius=6
+            corner_radius=RADIUS_SM
         )
         header.pack(fill="x", padx=10, pady=(10, 5))
         header.pack_propagate(False)
@@ -705,8 +721,9 @@ class ModernFileManager(ctk.CTk):
                 empty_frame,
                 text="➕ Add Your First File",
                 command=self.open_file,
-                fg_color=ACCENT_COLOR,
-                hover_color="#106EBE",
+                fg_color=PRIMARY,
+                text_color=ON_PRIMARY,
+                hover_color=ON_PRIMARY_CONTAINER,
                 height=40,
                 font=BODY_FONT
             )
@@ -888,48 +905,51 @@ class ModernFileManager(ctk.CTk):
             self.add_btn.configure(state="normal")
             return
         
+        # Process in background thread to keep UI responsive
+        self.status_label.configure(text=f"Adding {os.path.basename(file_path)}...")
+        threading.Thread(target=self._add_file_async, args=(file_path,), daemon=True).start()
+
+    def _add_file_async(self, file_path):
+        """Add file processing in background"""
         try:
             from text_extractor import get_searchable_text
             
+            # This is the heavy operation
             searchable_text = get_searchable_text(file_path)
             
-            logging.info(f"Added file {file_path} with searchable_text: {searchable_text[:500]}")
+            logging.info(f"Added file {file_path} with searchable_text snippet: {searchable_text[:100]}")
             
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-            cur.execute("SELECT id FROM files WHERE lower(path) = lower(?)", (file_path,))
-            existing = cur.fetchone()
-            if existing:
-                # Update existing
-                cur.execute("""
-                    UPDATE files
-                    SET access_count = access_count + 1, last_opened = datetime('now'), searchable_text = ?
-                    WHERE lower(path) = lower(?)
-                """, (searchable_text, file_path))
-            else:
-                # Insert new
-                cur.execute("""
-                    INSERT INTO files(path, searchable_text, access_count, last_opened)
-                    VALUES (?, ?, 1, datetime('now'))
-                """, (file_path, searchable_text))
+            cur.execute("""
+                INSERT INTO files(path, searchable_text, access_count, last_opened)
+                VALUES (?, ?, 1, datetime('now'))
+            """, (file_path, searchable_text))
             conn.commit()
             conn.close()
             
-            logging.info(f"Successfully added/updated file: {file_path}")
-            self.status_label.configure(text=f"Added: {os.path.basename(file_path)}")
-            
-            # Refresh current view
-            self.load_view(self.current_view)
-            
-            # Open the file
-            self.open_existing_file(file_path)
+            # Update UI on main thread
+            self.after(0, self._on_file_added_success, file_path)
             
         except Exception as e:
             logging.error(f"Failed to add file: {e}")
-            messagebox.showerror("Error", f"Failed to add file: {e}")
-        
-        # Re-enable add button
+            self.after(0, lambda: messagebox.showerror("Error", f"Failed to add file: {e}"))
+            self.after(0, lambda: self.add_btn.configure(state="normal"))
+
+    def _on_file_added_success(self, file_path):
+        """Callback for successful file addition"""
+        self.status_label.configure(text=f"Added: {os.path.basename(file_path)}")
         self.add_btn.configure(state="normal")
+        
+        # Refresh semantic searcher to include the new file
+        if self.semantic_searcher:
+            threading.Thread(target=self.semantic_searcher.load_files, daemon=True).start()
+        
+        # Refresh current view
+        self.load_view(self.current_view)
+        
+        # Open the file
+        self.open_existing_file(file_path)
 
     def open_existing_file(self, file_path):
         """Open an existing tracked file"""
@@ -938,11 +958,11 @@ class ModernFileManager(ctk.CTk):
             file_path = os.path.abspath(file_path)
             
             if not os.path.exists(file_path):
-                messagebox.showerror("Error", "File not found on disk")
+                messagebox.showerror("Error", f"File not found on disk:\n{file_path}")
                 return
             
-            # Open file
-            os.startfile(file_path)
+            # Open file (Cross-platform)
+            open_path(file_path)
             
             # Log session in background
             threading.Thread(
@@ -961,7 +981,7 @@ class ModernFileManager(ctk.CTk):
         try:
             folder_path = os.path.dirname(os.path.abspath(file_path))
             if os.path.exists(folder_path):
-                os.startfile(folder_path)
+                open_path(folder_path)
                 self.status_label.configure(text=f"Opened folder: {os.path.basename(folder_path)}")
             else:
                 messagebox.showerror("Error", "Folder not found")
@@ -973,7 +993,7 @@ class ModernFileManager(ctk.CTk):
         menu = ctk.CTkToplevel(self)
         menu.overrideredirect(True)  # Remove window decorations
         menu.geometry(f"+{x}+{y}")
-        menu.configure(fg_color=CONTENT_BG)
+        menu.configure(fg_color=SURFACE_CONTAINER)
         
         # Menu items
         menu_items = [
@@ -988,7 +1008,7 @@ class ModernFileManager(ctk.CTk):
         for text, command in menu_items:
             if text.startswith("───"):
                 # Separator
-                separator = ctk.CTkFrame(menu, height=1, fg_color=BORDER_COLOR)
+                separator = ctk.CTkFrame(menu, height=1, fg_color=OUTLINE)
                 separator.pack(fill="x", padx=5, pady=2)
             else:
                 btn = ctk.CTkButton(
@@ -996,7 +1016,7 @@ class ModernFileManager(ctk.CTk):
                     text=text,
                     command=lambda cmd=command, m=menu: (cmd(), m.destroy()),
                     fg_color="transparent",
-                    hover_color=HOVER_BG,
+                    hover_color=SURFACE_CONTAINER_HIGH,
                     anchor="w",
                     height=30,
                     font=BODY_FONT

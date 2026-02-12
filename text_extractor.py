@@ -65,12 +65,15 @@ def get_searchable_text(path):
         try:
             import pytesseract
             from PIL import Image
+            
+            # Check if tesseract is installed/accessible
+            pytesseract.get_tesseract_version()
+            
             img = Image.open(path)
             content_text = pytesseract.image_to_string(img)
-        except ImportError:
-            logging.warning("pytesseract or PIL not installed, cannot extract from images")
-        except Exception as e:
-            logging.error(f"Error reading image {path}: {e}")
+        except (ImportError, EnvironmentError, Exception) as e:
+            logging.warning(f"OCR extraction failed for {path}: {e}")
+            content_text = ""
     
     # Add more file types as needed (e.g., .pptx, .xlsx, .html)
     

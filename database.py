@@ -8,7 +8,10 @@ logging.info(f"USING DATABASE: {os.path.abspath(DB_PATH)}")
 
 def get_connection(db_path=None):
     path = db_path or DB_PATH
-    return sqlite3.connect(path)
+    # Ensure data directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    # Add timeout for multi-threaded access
+    return sqlite3.connect(path, timeout=10.0)
 
 
 def init_db(db_path=None):

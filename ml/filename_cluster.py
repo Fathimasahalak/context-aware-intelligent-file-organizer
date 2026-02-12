@@ -84,16 +84,17 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
     
     num_files = len(rows)
     
+    if num_files < 2:
+        logging.warning(f"Not enough documents to cluster (found {num_files}, need at least 2).")
+        conn.close()
+        return
+    
     # Dynamic cluster count based on file count
     if k is None:
-        if num_files < 2:
-            logging.warning(f"Not enough documents to cluster (found {num_files}, need at least 2).")
-            conn.close()
-            return
-        elif num_files <= 4:
+        if num_files <= 4:
             k = 2
         elif num_files <= 10:
-            k = 5
+            k = 3
         elif num_files <= 20:
             k = 4
         else:
@@ -104,46 +105,36 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
     
     logging.info(f"Clustering {num_files} documents into {k} groups...")
     
-    # Progress callback placeholder - could be extended for UI updates
-    def log_progress(stage, current=None, total=None):
-        if total:
-            logging.info(f"Clustering progress: {stage} ({current}/{total})")
-        else:
-            logging.info(f"Clustering progress: {stage}")
-
     # Prepare text data for clustering
-    # We combine filename (cleaned) + searchable text (first 500 chars)
     corpus = []
     for _, path, text in rows:
         fname_cleaned = clean_filename(path)
-        content_snippet = text or ""  # Use full content for better clustering
+        content_snippet = text or ""
         combined = f"{fname_cleaned} {content_snippet}"
         corpus.append(combined)
 
     # Vectorize
-    log_progress("Vectorizing text...")
     vectorizer = TfidfVectorizer(stop_words='english', max_features=2000)
-    X = vectorizer.fit_transform(corpus)
+    try:
+        X = vectorizer.fit_transform(corpus)
+    except ValueError as e:
+        logging.error(f"Vectorization failed: {e}")
+        conn.close()
+        return
     
     # Cluster
-    log_progress(f"Running KMeans clustering (k={k})...")
     kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
     kmeans.fit(X)
     
     # Generate labels for each cluster
-    log_progress("Generating cluster labels...")
     feature_names = vectorizer.get_feature_names_out()
     cluster_labels = {}
     
     for i in range(k):
         label = get_cluster_label(X, kmeans, i, feature_names)
         cluster_labels[i] = label
-        log_progress("Labeling clusters", i + 1, k)
-        logging.info(f"Cluster {i}: {label}")
 
     # Update database
-    log_progress("Updating database...")
-    total_rows = len(rows)
     for idx, (fid, _, _) in enumerate(rows):
         cluster_id = int(kmeans.labels_[idx])
         label = cluster_labels[cluster_id]
@@ -153,10 +144,6 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
             SET cluster_id = ?, cluster_label = ?
             WHERE id = ?
         """, (cluster_id, label, fid))
-        
-        # Log progress every 10 files
-        if (idx + 1) % 10 == 0 or idx == total_rows - 1:
-            log_progress("Saving results", idx + 1, total_rows)
     
     # Clear clustering for non-docs
     doc_ids = {r[0] for r in rows}

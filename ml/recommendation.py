@@ -78,7 +78,8 @@ def get_smart_priority_files(limit=20):
     now = datetime.now()
 
     # Pre-calculate max values for normalization
-    max_count = max([r[2] for r in rows]) if rows else 1
+    counts = [r[2] for r in rows]
+    max_count = max(counts) if counts else 1
     
     for fid in file_ids:
         data = file_map[fid]

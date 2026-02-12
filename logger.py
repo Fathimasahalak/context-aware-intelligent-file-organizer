@@ -1,27 +1,27 @@
 import time
+import os
 from datetime import datetime
 from database import get_connection
-from text_extractor import get_searchable_text
 
 open_sessions = {}
 
 
 def start_file_session(file_path):
     # Normalize path to ensure consistency
-    import os
     file_path = os.path.normpath(os.path.abspath(file_path))
     
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM files WHERE path = ?", (file_path,))
+    cur.execute("SELECT id FROM files WHERE lower(path) = lower(?)", (file_path,))
     row = cur.fetchone()
 
     if row is None:
-        searchable_text = get_searchable_text(file_path)
+        # Note: searchable_text should be handled by the caller (app.py) 
+        # to keep logger.py focused on session tracking
         cur.execute(
-            "INSERT INTO files(path, access_count, total_time, last_opened, searchable_text) VALUES (?,0,0,?,?)",
-            (file_path, datetime.now().isoformat(), searchable_text)
+            "INSERT INTO files(path, access_count, total_time, last_opened) VALUES (?,0,0,?)",
+            (file_path, datetime.now().isoformat())
         )
         file_id = cur.lastrowid
     else:
@@ -37,12 +37,21 @@ def start_file_session(file_path):
 
 
 def end_file_session(file_path):
+    file_path = os.path.normpath(os.path.abspath(file_path))
+    
     if file_path not in open_sessions:
+        # Fallback: if no start was recorded, just log a quick access
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE files SET access_count = access_count + 1, last_opened = ? WHERE lower(path) = lower(?)", 
+                   (datetime.now().isoformat(), file_path))
+        conn.commit()
+        conn.close()
         return
 
     session = open_sessions[file_path]
     start_time = session["start_time"]
-    duration = int(time.time() - start_time)
+    duration = max(1, int(time.time() - start_time))
     file_id = session["file_id"]
 
     conn = get_connection()

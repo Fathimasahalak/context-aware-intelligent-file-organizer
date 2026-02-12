@@ -13,10 +13,18 @@ from ml.recommendation import get_smart_priority_files
 
 from config import DB_PATH, COLORS
 
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename='file_organizer.log')
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"Failed to initialize database: {e}")
+    import sys
+    sys.exit(1)
 
 # Modern File Manager Color Scheme
 SIDEBAR_BG = "#1E1E1E"
@@ -76,6 +84,13 @@ class ModernFileManager(ctk.CTk):
         
         # Run clustering if needed
         self._ensure_clustering()
+
+        # Keyboard shortcuts
+        self.bind('<Control-o>', lambda e: self.open_file())
+        self.bind('<Control-f>', lambda e: self.search_entry.focus())
+        self.bind('<Control-r>', lambda e: self.refresh_clusters())
+
+        logging.info("Application started")
 
     def build_ui(self):
         """Build the modern file manager UI"""
@@ -153,7 +168,7 @@ class ModernFileManager(ctk.CTk):
         actions_label.pack(anchor="w", padx=15, pady=(0, 10))
         
         # Add File button
-        add_btn = ctk.CTkButton(
+        self.add_btn = ctk.CTkButton(
             sidebar,
             text="➕ Add File",
             command=self.open_file,
@@ -163,7 +178,7 @@ class ModernFileManager(ctk.CTk):
             font=BODY_FONT,
             corner_radius=6
         )
-        add_btn.pack(fill="x", padx=15, pady=5)
+        self.add_btn.pack(fill="x", padx=15, pady=5)
         
         # Refresh Clusters button
         refresh_btn = ctk.CTkButton(
@@ -250,11 +265,10 @@ class ModernFileManager(ctk.CTk):
         headers_frame.pack_propagate(False)
         
         headers = [
-            ("Name", 0.4),
+            ("Name", 0.5),
             ("Type", 0.15),
             ("Last Opened", 0.2),
-            ("Score", 0.15),
-            ("Actions", 0.1)
+            ("Actions", 0.15)
         ]
         
         for header_text, width_ratio in headers:
@@ -322,6 +336,7 @@ class ModernFileManager(ctk.CTk):
 
     def load_view(self, view_name):
         """Load data for the selected view"""
+        logging.info(f"Loading view {view_name}")
         # Clear current list
         for widget in self.file_list_frame.winfo_children():
             widget.destroy()
@@ -346,12 +361,14 @@ class ModernFileManager(ctk.CTk):
         try:
             files = get_smart_priority_files(limit=50)
             
+            logging.info(f"Files to display: {[os.path.basename(f['path']) for f in files]}")
+            
             # Update UI on main thread
             self.after(0, self._display_smart_priority, files)
             
         except Exception as e:
             print(f"Error loading smart priority: {e}")
-            self.after(0, lambda: self.show_empty_state(f"Error: {e}"))
+            self.after(0, lambda: self.show_empty_state("Unable to load smart priority files. Please check your database connection."))
     
     def _display_smart_priority(self, files):
         """Display smart priority files on main thread"""
@@ -363,10 +380,15 @@ class ModernFileManager(ctk.CTk):
             self.show_empty_state("No files tracked yet. Add some files to get started!")
             return
         
+        added_names = set()
         for file_data in files:
-            self.create_file_row(file_data)
+            name = os.path.basename(file_data["path"])
+            if name not in added_names:
+                self.create_file_row(file_data)
+                added_names.add(name)
         
-        self.file_count_label.configure(text=f"{len(files)} files")
+        logging.info(f"Displayed smart files: {list(added_names)}")
+        self.file_count_label.configure(text=f"{len(added_names)} files")
         self.status_label.configure(text="Smart priority loaded")
 
 
@@ -394,7 +416,7 @@ class ModernFileManager(ctk.CTk):
             
         except Exception as e:
             print(f"Error loading clusters: {e}")
-            self.after(0, lambda: self.show_empty_state(f"Error: {e}"))
+            self.after(0, lambda: self.show_empty_state("Unable to load file categories. Please check your database connection."))
     
     def _display_clusters(self, clusters):
         """Display clusters on main thread"""
@@ -405,10 +427,11 @@ class ModernFileManager(ctk.CTk):
             self.show_empty_state("No clusters yet. Click 'Refresh Clusters' to organize your files!")
             return
         
+        added_names = set()
         for cluster_label, count in clusters:
-            self.create_cluster_section(cluster_label, count)
+            self.create_cluster_section(cluster_label, count, added_names)
         
-        total_files = sum(c[1] for c in clusters)
+        total_files = len(added_names)
         self.file_count_label.configure(text=f"{total_files} files in {len(clusters)} categories")
         self.status_label.configure(text="Categories loaded")
 
@@ -434,7 +457,7 @@ class ModernFileManager(ctk.CTk):
             
         except Exception as e:
             print(f"Error loading files: {e}")
-            self.after(0, lambda: self.show_empty_state(f"Error: {e}"))
+            self.after(0, lambda: self.show_empty_state("Unable to load all files. Please check your database connection."))
     
     def _display_all_files(self, rows):
         """Display all files on main thread"""
@@ -445,21 +468,26 @@ class ModernFileManager(ctk.CTk):
             self.show_empty_state("No files tracked yet. Add some files to get started!")
             return
         
+        added_names = set()
         for path, count, last_opened in rows:
-            file_data = {
-                "path": path,
-                "score": count / 10.0,  # Normalize
-                "reasons": {"Freq": str(count)}
-            }
-            self.create_file_row(file_data, last_opened)
+            name = os.path.basename(path)
+            if name not in added_names:
+                file_data = {
+                    "path": path,
+                    "score": count / 10.0,  # Normalize
+                    "reasons": {"Freq": str(count)}
+                }
+                self.create_file_row(file_data, last_opened)
+                added_names.add(name)
         
-        self.file_count_label.configure(text=f"{len(rows)} files")
+        self.file_count_label.configure(text=f"{len(added_names)} files")
         self.status_label.configure(text="All files loaded")
 
     def create_file_row(self, file_data, last_opened=None):
         """Create a file row in the list"""
         path = file_data["path"]
-        score = file_data.get("score", 0)
+        
+        logging.info(f"Creating file row for {os.path.basename(path)}")
         
         # File row container
         row = ctk.CTkFrame(
@@ -487,7 +515,7 @@ class ModernFileManager(ctk.CTk):
             text_color=TEXT_PRIMARY,
             anchor="w"
         )
-        name_label.place(relx=0, rely=0.5, anchor="w", relwidth=0.4)
+        name_label.place(relx=0, rely=0.5, anchor="w", relwidth=0.5)
         name_label.bind("<Double-Button-1>", lambda e: self.open_existing_file(path))
         
         # Type
@@ -499,7 +527,7 @@ class ModernFileManager(ctk.CTk):
             text_color=TEXT_SECONDARY,
             anchor="w"
         )
-        type_label.place(relx=0.4, rely=0.5, anchor="w", relwidth=0.15)
+        type_label.place(relx=0.5, rely=0.5, anchor="w", relwidth=0.15)
         
         # Last Opened
         if last_opened:
@@ -514,18 +542,7 @@ class ModernFileManager(ctk.CTk):
             text_color=TEXT_SECONDARY,
             anchor="w"
         )
-        time_label.place(relx=0.55, rely=0.5, anchor="w", relwidth=0.2)
-        
-        # Score
-        score_text = f"{score:.2f}" if score > 0 else "-"
-        score_label = ctk.CTkLabel(
-            row,
-            text=score_text,
-            font=SMALL_FONT,
-            text_color=ACCENT_COLOR if score > 0.5 else TEXT_SECONDARY,
-            anchor="w"
-        )
-        score_label.place(relx=0.75, rely=0.5, anchor="w", relwidth=0.15)
+        time_label.place(relx=0.65, rely=0.5, anchor="w", relwidth=0.2)
         
         # Delete button
         delete_btn = ctk.CTkButton(
@@ -538,9 +555,9 @@ class ModernFileManager(ctk.CTk):
             hover_color=DELETE_COLOR,
             font=BODY_FONT
         )
-        delete_btn.place(relx=0.9, rely=0.5, anchor="w", relwidth=0.1)
+        delete_btn.place(relx=0.85, rely=0.5, anchor="w", relwidth=0.15)
 
-    def create_cluster_section(self, cluster_label, count):
+    def create_cluster_section(self, cluster_label, count, added_names):
         """Create a cluster section"""
         # Cluster header
         header = ctk.CTkFrame(
@@ -583,12 +600,15 @@ class ModernFileManager(ctk.CTk):
         conn.close()
         
         for path, count, last_opened in files:
-            file_data = {
-                "path": path,
-                "score": count / 10.0,
-                "reasons": {}
-            }
-            self.create_file_row(file_data, last_opened)
+            name = os.path.basename(path)
+            if name not in added_names:
+                file_data = {
+                    "path": path,
+                    "score": count / 10.0,
+                    "reasons": {}
+                }
+                self.create_file_row(file_data, last_opened)
+                added_names.add(name)
 
     def show_empty_state(self, message):
         """Show empty state message"""
@@ -620,6 +640,15 @@ class ModernFileManager(ctk.CTk):
         )
         label.pack()
         
+        # Add progress bar
+        progress_bar = ctk.CTkProgressBar(
+            loading_frame,
+            mode="indeterminate",
+            width=200
+        )
+        progress_bar.pack(pady=10)
+        progress_bar.start()
+        
         self.status_label.configure(text=message)
 
     def format_time(self, timestamp_str):
@@ -646,6 +675,12 @@ class ModernFileManager(ctk.CTk):
         if not query:
             return
         
+        # Sanitize query
+        if len(query) > 200:
+            query = query[:200]
+            messagebox.showinfo("Info", "Search query was truncated to 200 characters.")
+        
+        logging.info(f"Performing search: {query}")
         # Clear current list
         for widget in self.file_list_frame.winfo_children():
             widget.destroy()
@@ -659,16 +694,44 @@ class ModernFileManager(ctk.CTk):
         """Perform search in background"""
         try:
             searcher = self._ensure_semantic_searcher()
-            results = searcher.search(query, top_k=20)
+            semantic_results = searcher.search(query, top_k=10)
             
-            # Filter by threshold
-            threshold = 0.1
-            results = [r for r in results if r["score"] >= threshold]
+            # Filter semantic results by threshold
+            threshold = 0.2
+            semantic_results = [r for r in semantic_results if r["score"] >= threshold]
+            
+            # Add keyword matches as fallback only if no semantic results
+            keyword_results = []
+            if len(semantic_results) == 0:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.cursor()
+                cur.execute("SELECT id, path FROM files WHERE lower(searchable_text) LIKE lower(?)", ('%' + query + '%',))
+                keyword_rows = cur.fetchall()
+                conn.close()
+                
+                for row in keyword_rows:
+                    file_id, path = row
+                    # Check if not already in semantic results (though none)
+                    keyword_results.append({
+                        "file_id": file_id,
+                        "path": path,
+                        "score": 0.5  # Lower score for keyword matches
+                    })
+            
+            # Combine and sort results
+            all_results_dict = {}
+            for r in semantic_results + keyword_results:
+                path = r["path"]
+                if path not in all_results_dict or r["score"] > all_results_dict[path]["score"]:
+                    all_results_dict[path] = r
+            all_results = list(all_results_dict.values())
+            all_results.sort(key=lambda x: x['score'], reverse=True)
+            results = all_results[:10]  # Limit to top 10
             
             # Update UI on main thread
             self.after(0, self._update_search_results, results)
         except Exception as e:
-            self.after(0, lambda: self.status_label.configure(text=f"Search error: {e}"))
+            self.after(0, lambda: self.status_label.configure(text="Search failed. Please try again."))
 
     def _update_search_results(self, results):
         """Update search results on main thread"""
@@ -680,21 +743,54 @@ class ModernFileManager(ctk.CTk):
             self.status_label.configure(text="No results")
             return
         
+        seen = set()
         for result in results:
-            file_data = {
-                "path": result["path"],
-                "score": result["score"],
-                "reasons": {}
-            }
-            self.create_file_row(file_data)
+            norm_path = os.path.normcase(result["path"])
+            if norm_path not in seen:
+                file_data = {
+                    "path": result["path"],
+                    "score": result["score"],
+                    "reasons": {}
+                }
+                self.create_file_row(file_data)
+                seen.add(norm_path)
         
-        self.file_count_label.configure(text=f"{len(results)} results")
-        self.status_label.configure(text=f"Found {len(results)} results")
+        self.file_count_label.configure(text=f"{len(seen)} results")
+        self.status_label.configure(text=f"Found {len(seen)} results")
 
     def open_file(self):
         """Open file dialog to add a file"""
+        logging.info("Opening file dialog")
         file_path = filedialog.askopenfilename(title="Select a file to track")
         if not file_path:
+            logging.info("File dialog canceled")
+            return
+        
+        # Disable add button to prevent multiple additions
+        self.add_btn.configure(state="disabled")
+        
+        # Validate file path
+        if not os.path.exists(file_path):
+            logging.warning(f"Selected file does not exist: {file_path}")
+            messagebox.showerror("Error", "Selected file does not exist.")
+            self.add_btn.configure(state="normal")
+            return
+        
+        # Check if file already added
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM files WHERE lower(path) = lower(?)", (file_path,))
+        if cur.fetchone():
+            messagebox.showinfo("Info", "This file is already added.")
+            conn.close()
+            self.add_btn.configure(state="normal")
+            return
+        conn.close()
+        
+        if not os.access(file_path, os.R_OK):
+            logging.warning(f"Selected file is not readable: {file_path}")
+            messagebox.showerror("Error", "Selected file is not readable.")
+            self.add_btn.configure(state="normal")
             return
         
         try:
@@ -702,15 +798,29 @@ class ModernFileManager(ctk.CTk):
             
             searchable_text = get_searchable_text(file_path)
             
+            logging.info(f"Added file {file_path} with searchable_text: {searchable_text[:500]}")
+            
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-            cur.execute("""
-                INSERT OR IGNORE INTO files(path, searchable_text, access_count, last_opened)
-                VALUES (?, ?, 1, datetime('now'))
-            """, (file_path, searchable_text))
+            cur.execute("SELECT id FROM files WHERE lower(path) = lower(?)", (file_path,))
+            existing = cur.fetchone()
+            if existing:
+                # Update existing
+                cur.execute("""
+                    UPDATE files
+                    SET access_count = access_count + 1, last_opened = datetime('now'), searchable_text = ?
+                    WHERE lower(path) = lower(?)
+                """, (searchable_text, file_path))
+            else:
+                # Insert new
+                cur.execute("""
+                    INSERT INTO files(path, searchable_text, access_count, last_opened)
+                    VALUES (?, ?, 1, datetime('now'))
+                """, (file_path, searchable_text))
             conn.commit()
             conn.close()
             
+            logging.info(f"Successfully added/updated file: {file_path}")
             self.status_label.configure(text=f"Added: {os.path.basename(file_path)}")
             
             # Refresh current view
@@ -720,7 +830,11 @@ class ModernFileManager(ctk.CTk):
             self.open_existing_file(file_path)
             
         except Exception as e:
+            logging.error(f"Failed to add file: {e}")
             messagebox.showerror("Error", f"Failed to add file: {e}")
+        
+        # Re-enable add button
+        self.add_btn.configure(state="normal")
 
     def open_existing_file(self, file_path):
         """Open an existing tracked file"""
@@ -752,15 +866,11 @@ class ModernFileManager(ctk.CTk):
         try:
             start_file_session(file_path)
             
-            # Refresh UI
-            self.after(0, lambda: self.load_view(self.current_view))
-            
             # Wait for file close (approximate)
             time.sleep(10)
             end_file_session(file_path)
             
-            # Refresh again
-            self.after(0, lambda: self.load_view(self.current_view))
+            # Removed refresh to prevent duplicate listings
             
         except Exception as e:
             print(f"Session error: {e}")
@@ -779,9 +889,16 @@ class ModernFileManager(ctk.CTk):
             # Remove from database
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-            cur.execute("DELETE FROM files WHERE path = ?", (file_path,))
+            cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
+            deleted_count = cur.rowcount
             conn.commit()
             conn.close()
+            
+            logging.info(f"Deleted {deleted_count} rows for path: {file_path}")
+            
+            if deleted_count == 0:
+                messagebox.showwarning("Warning", "File was not found in the database. It may have already been removed.")
+                return
             
             # Remove from semantic search
             if self.semantic_searcher:
@@ -797,6 +914,7 @@ class ModernFileManager(ctk.CTk):
 
     def refresh_clusters(self):
         """Refresh file clusters"""
+        logging.info("Refreshing clusters")
         self.status_label.configure(text="Clustering files...")
         
         def do_cluster():
@@ -805,7 +923,8 @@ class ModernFileManager(ctk.CTk):
                 self.after(0, lambda: self.status_label.configure(text="Clustering complete"))
                 self.after(0, lambda: self.load_view(self.current_view))
             except Exception as e:
-                self.after(0, lambda: self.status_label.configure(text=f"Clustering error: {e}"))
+                logging.error(f"Clustering failed: {e}")
+                self.after(0, lambda: self.status_label.configure(text="Clustering failed. Check logs for details."))
         
         threading.Thread(target=do_cluster, daemon=True).start()
 
@@ -826,9 +945,13 @@ class ModernFileManager(ctk.CTk):
     def _ensure_semantic_searcher(self):
         """Lazily load SemanticSearch on first use"""
         if self.semantic_searcher is None:
-            from ml.semantic_search import SemanticSearch
-            self.semantic_searcher = SemanticSearch()
-            self.semantic_searcher.load_files()
+            try:
+                from ml.semantic_search import SemanticSearch
+                self.semantic_searcher = SemanticSearch()
+                self.semantic_searcher.load_files()
+            except Exception as e:
+                self.semantic_searcher = None
+                messagebox.showerror("Error", f"Failed to initialize semantic search: {e}")
         return self.semantic_searcher
 
 

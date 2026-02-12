@@ -5,12 +5,13 @@ from config import DB_PATH
 print("USING DATABASE:", os.path.abspath(DB_PATH))
 
 
-def get_connection():
-    return sqlite3.connect(DB_PATH)
+def get_connection(db_path=None):
+    path = db_path or DB_PATH
+    return sqlite3.connect(path)
 
 
-def init_db():
-    conn = get_connection()
+def init_db(db_path=None):
+    conn = get_connection(db_path)
     cur = conn.cursor()
 
     cur.execute("""
@@ -36,5 +37,7 @@ def init_db():
     )
     """)
 
+    conn.commit()
+    cur.execute("PRAGMA journal_mode = DELETE")
     conn.commit()
     conn.close()

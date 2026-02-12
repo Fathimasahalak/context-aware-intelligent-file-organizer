@@ -13,7 +13,7 @@ COLORS = {
 }
 
 # File Extensions
-DOCUMENT_EXTENSIONS = {'.pdf', '.txt', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.md'}
+DOCUMENT_EXTENSIONS = {'.pdf', '.txt', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.md', '.jpg', '.png', '.jpeg', '.gif', '.bmp'}
 
 # Model Settings
 MAX_PDF_PAGES = 5

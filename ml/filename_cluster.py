@@ -6,6 +6,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from collections import Counter
 
+# Add parent directory to path for imports
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from config import DB_PATH, DOCUMENT_EXTENSIONS, CLUSTERING_CLUSTERS
 
 
@@ -28,11 +32,36 @@ def get_cluster_label(tfidf_matrix, model, cluster_id, feature_names):
     # Sort features by weight in the centroid
     top_indices = centroid.argsort()[::-1]
     
-    # Get top 3 terms
-    top_terms = [feature_names[i] for i in top_indices[:3]]
+    # Get top 5 terms for better matching
+    top_terms = [feature_names[i] for i in top_indices[:5]]
     
-    # Create a label (e.g., "Invoice / Report")
-    label = " / ".join([t.title() for t in top_terms])
+    # Define category mappings
+    category_mappings = {
+        "Work Documents": ["report", "project", "work", "business", "meeting", "email", "college"],
+        "Personal Files": ["personal", "goals", "life", "diary", "journal"],
+        "Educational Materials": ["study", "course", "tutorial", "lesson", "basics", "guide", "ml", "machine", "learning", "data", "algorithm"],
+        "Financial Documents": ["invoice", "bill", "budget", "expense", "tax", "receipt"],
+        "Creative Projects": ["design", "art", "music", "video", "photo", "portfolio", "story", "tale", "novel"],
+        "Technical Docs": ["code", "programming", "api", "manual", "spec", "config", "cybersecurity", "security"],
+        "Media Files": ["image", "video", "audio", "photo", "media"],
+        "Archives": ["archive", "backup", "old", "history"]
+    }
+    
+    # Find the best matching category
+    best_category = None
+    best_score = 0
+    for category, keywords in category_mappings.items():
+        score = sum(1 for term in top_terms if term in keywords)
+        if score > best_score:
+            best_score = score
+            best_category = category
+    
+    if best_category and best_score > 0:
+        return best_category
+    
+    # Fallback to top 3 terms
+    top_terms_short = [feature_names[i] for i in top_indices[:3]]
+    label = " ".join([t.title() for t in top_terms_short])
     return label
 
 
@@ -63,7 +92,7 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
         elif num_files <= 4:
             k = 2
         elif num_files <= 10:
-            k = 3
+            k = 5
         elif num_files <= 20:
             k = 4
         else:
@@ -79,12 +108,12 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
     corpus = []
     for _, path, text in rows:
         fname_cleaned = clean_filename(path)
-        content_snippet = (text or "")[:500]  # Use start of content for better context
+        content_snippet = text or ""  # Use full content for better clustering
         combined = f"{fname_cleaned} {content_snippet}"
         corpus.append(combined)
 
     # Vectorize
-    vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=2000)
     X = vectorizer.fit_transform(corpus)
     
     # Cluster

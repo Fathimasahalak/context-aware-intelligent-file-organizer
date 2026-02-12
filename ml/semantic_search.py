@@ -18,6 +18,8 @@ from config import DB_PATH
 EMBEDDING_CACHE = os.path.join("data", "file_embeddings.npy")
 ID_CACHE = os.path.join("data", "file_ids.npy")
 
+MAX_CACHE_FILES = 1000
+
 
 class SemanticSearch:
     def __init__(self, db_path=None):
@@ -30,14 +32,33 @@ class SemanticSearch:
     def load_model(self):
         global _shared_model
         if _shared_model is None:
-            try:
-                print("Loading AI model (BERT)... this may take a few seconds.")
-                _shared_model = SentenceTransformer('all-MiniLM-L6-v2')
-                print("Model loaded successfully.")
-            except Exception as e:
-                print(f"FAILED to load AI model: {e}")
-                raise e
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    logging.info(f"Loading AI model (BERT), attempt {attempt + 1}...")
+                    from sentence_transformers import SentenceTransformer
+                    _shared_model = SentenceTransformer('all-MiniLM-L6-v2')
+                    logging.info("Model loaded successfully.")
+                    break
+                except Exception as e:
+                    logging.error(f"Model loading failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_retries - 1:
+                        import time
+                        time.sleep(2)  # Wait before retry
+                    else:
+                        logging.error("All attempts failed.")
+                        _shared_model = None
+                        raise e
         self.model = _shared_model
+
+    def get_model(self):
+        if self.model is None:
+            try:
+                self.load_model()
+            except Exception as e:
+                print(f"Model loading failed, search will not work: {e}")
+                self.model = None
+        return self.model
 
     def load_files(self):
         conn = sqlite3.connect(self.db_path)
@@ -61,11 +82,17 @@ class SemanticSearch:
         self.file_paths = [r[1] for r in rows]
         texts = [r[2] for r in rows]
 
+        # Limit cache size to prevent excessive disk usage
+        if len(self.file_ids) > MAX_CACHE_FILES:
+            print(f"Warning: Too many files ({len(self.file_ids)}) for caching. Limiting to {MAX_CACHE_FILES} most recent.")
+            self.file_ids = self.file_ids[-MAX_CACHE_FILES:]  # Keep most recent IDs
+            self.file_paths = self.file_paths[-MAX_CACHE_FILES:]
+            texts = texts[-MAX_CACHE_FILES:]
+
         # No cache → compute all
         if not os.path.exists(EMBEDDING_CACHE) or not os.path.exists(ID_CACHE):
             print("No embedding cache found. Computing all...")
-            self.load_model() # Only load if we need to encode
-            self.vectors = self.model.encode(texts, show_progress_bar=True)
+            self.vectors = self.get_model().encode(texts, show_progress_bar=True)
             self.save_cache()
             return
 
@@ -106,8 +133,7 @@ class SemanticSearch:
         # Append new embeddings
         if new_entries:
             print(f"Embedding {len(new_entries)} new files...")
-            self.load_model() # Ensure model is ready for encoding
-            new_vectors = self.model.encode(new_texts, show_progress_bar=True)
+            new_vectors = self.get_model().encode(new_texts, show_progress_bar=True)
 
             cached_ids.extend(new_entries)
             if len(cached_vectors) > 0:
@@ -128,8 +154,7 @@ class SemanticSearch:
         if self.vectors is None or len(self.file_ids) == 0:
             return []
 
-        self.load_model()
-        query_vec = self.model.encode([query])
+        query_vec = self.get_model().encode([query])
         
         # Handle case where vectors might be 1D (empty case)
         if len(self.vectors.shape) == 1:
@@ -170,6 +195,9 @@ class SemanticSearch:
                 
             # Update cache on disk so next load is correct
             self.save_cache()
+            
+            # Reload to ensure consistency with DB
+            self.load_files()
             print(f"Removed {os.path.basename(file_path)} from index.")
             
         except Exception as e:

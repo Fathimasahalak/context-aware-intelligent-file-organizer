@@ -9,7 +9,17 @@ __pycache__/
 *.pyc
 
 # Virtual environment
+.venv/
 venv/
+
+# ML models
+models/
+
+# Test cache
+.pytest_cache/
+
+# Logs
+file_organizer.log
 
 # OS files
 .DS_Store

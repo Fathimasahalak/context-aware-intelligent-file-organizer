@@ -1,4 +1,5 @@
 import os
+import logging
 import pdfplumber
 import zipfile
 import xml.etree.ElementTree as ET
@@ -17,7 +18,7 @@ def extract_text_from_pdf(path):
             pages_text = [page.extract_text() or "" for page in pages]
         return "\n".join(pages_text)
     except Exception as e:
-        print(f"Error reading PDF {path}: {e}")
+        logging.error(f"Error reading PDF {path}: {e}")
         return ""
 
 
@@ -42,7 +43,7 @@ def get_searchable_text(path):
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                 content_text = f.read()
         except Exception as e:
-            print(f"Error reading text file {path}: {e}")
+            logging.error(f"Error reading text file {path}: {e}")
     
     elif ext == '.pdf':
         content_text = extract_text_from_pdf(path)
@@ -57,7 +58,7 @@ def get_searchable_text(path):
                     paragraphs = root.findall('.//w:p', ns)
                     content_text = '\n'.join(''.join(t.text for t in p.findall('.//w:t', ns) if t.text) for p in paragraphs)
         except Exception as e:
-            print(f"Error reading docx {path}: {e}")
+            logging.error(f"Error reading docx {path}: {e}")
             content_text = ""
     
     elif ext in ['.jpg', '.png', '.jpeg', '.gif', '.bmp']:
@@ -67,9 +68,9 @@ def get_searchable_text(path):
             img = Image.open(path)
             content_text = pytesseract.image_to_string(img)
         except ImportError:
-            print("pytesseract or PIL not installed, cannot extract from images")
+            logging.warning("pytesseract or PIL not installed, cannot extract from images")
         except Exception as e:
-            print(f"Error reading image {path}: {e}")
+            logging.error(f"Error reading image {path}: {e}")
     
     # Add more file types as needed (e.g., .pptx, .xlsx, .html)
     

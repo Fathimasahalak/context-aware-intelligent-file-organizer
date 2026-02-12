@@ -1,12 +1,12 @@
 import sqlite3
 import os
-import time
+import logging
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from sklearn.metrics.pairwise import cosine_similarity
 
 from config import DB_PATH
-from ml.semantic_search import SemanticSearch
+from ml.semantic_search import get_semantic_searcher
 
 # Weights for the hybrid score
 W_RECENCY = 0.4
@@ -44,12 +44,11 @@ def get_smart_priority_files(limit=20):
     last_file_id = sorted_by_date[0][0]
     last_file_path = sorted_by_date[0][1]
     
-    print(f"Context: Recommending based on last file '{os.path.basename(last_file_path)}'")
+    logging.info(f"Context: Recommending based on last file '{os.path.basename(last_file_path)}'")
 
     # 3. Get Semantic Embeddings
-    # We use SemanticSearch helper to load cached vectors
-    searcher = SemanticSearch()
-    searcher.load_files() # Ensure vectors are loaded
+    # Use singleton to prevent multiple BERT model loads
+    searcher = get_semantic_searcher()
     
     # Map file_id to vector index
     id_to_idx = {fid: i for i, fid in enumerate(searcher.file_ids)}
@@ -115,6 +114,7 @@ def get_smart_priority_files(limit=20):
         scores.append({
             "path": data["path"],
             "score": final_score,
+            "last_opened": data["last_opened"],
             "reasons": {
                 "Recency": f"{recency_score:.2f}",
                 "Freq": f"{freq_score:.2f}",

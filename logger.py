@@ -7,6 +7,10 @@ open_sessions = {}
 
 
 def start_file_session(file_path):
+    # Normalize path to ensure consistency
+    import os
+    file_path = os.path.normpath(os.path.abspath(file_path))
+    
     conn = get_connection()
     cur = conn.cursor()
 

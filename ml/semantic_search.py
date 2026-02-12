@@ -15,8 +15,11 @@ _shared_model = None
 
 
 from config import DB_PATH
-EMBEDDING_CACHE = os.path.join("data", "file_embeddings.npy")
-ID_CACHE = os.path.join("data", "file_ids.npy")
+import os
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_script_dir)
+EMBEDDING_CACHE = os.path.join(_project_root, "data", "file_embeddings.npy")
+ID_CACHE = os.path.join(_project_root, "data", "file_ids.npy")
 
 MAX_CACHE_FILES = 1000
 
@@ -56,7 +59,7 @@ class SemanticSearch:
             try:
                 self.load_model()
             except Exception as e:
-                print(f"Model loading failed, search will not work: {e}")
+                logging.error(f"Model loading failed, search will not work: {e}")
                 self.model = None
         return self.model
 
@@ -84,14 +87,14 @@ class SemanticSearch:
 
         # Limit cache size to prevent excessive disk usage
         if len(self.file_ids) > MAX_CACHE_FILES:
-            print(f"Warning: Too many files ({len(self.file_ids)}) for caching. Limiting to {MAX_CACHE_FILES} most recent.")
+            logging.warning(f"Warning: Too many files ({len(self.file_ids)}) for caching. Limiting to {MAX_CACHE_FILES} most recent.")
             self.file_ids = self.file_ids[-MAX_CACHE_FILES:]  # Keep most recent IDs
             self.file_paths = self.file_paths[-MAX_CACHE_FILES:]
             texts = texts[-MAX_CACHE_FILES:]
 
         # No cache → compute all
         if not os.path.exists(EMBEDDING_CACHE) or not os.path.exists(ID_CACHE):
-            print("No embedding cache found. Computing all...")
+            logging.info("No embedding cache found. Computing all...")
             self.vectors = self.get_model().encode(texts, show_progress_bar=True)
             self.save_cache()
             return
@@ -132,7 +135,7 @@ class SemanticSearch:
 
         # Append new embeddings
         if new_entries:
-            print(f"Embedding {len(new_entries)} new files...")
+            logging.info(f"Embedding {len(new_entries)} new files...")
             new_vectors = self.get_model().encode(new_texts, show_progress_bar=True)
 
             cached_ids.extend(new_entries)
@@ -198,7 +201,27 @@ class SemanticSearch:
             
             # Reload to ensure consistency with DB
             self.load_files()
-            print(f"Removed {os.path.basename(file_path)} from index.")
+            logging.info(f"Removed {os.path.basename(file_path)} from index.")
             
         except Exception as e:
-            print(f"Error removing file from index: {e}")
+            logging.error(f"Error removing file from index: {e}")
+
+
+# Global singleton instance for SemanticSearch
+_shared_searcher = None
+
+def get_semantic_searcher(db_path=None):
+    """Get or create the shared SemanticSearch instance.
+    
+    This ensures the BERT model is loaded only once across the application.
+    """
+    global _shared_searcher
+    if _shared_searcher is None:
+        _shared_searcher = SemanticSearch(db_path)
+        _shared_searcher.load_files()
+    return _shared_searcher
+
+def reset_semantic_searcher():
+    """Reset the shared instance (useful for testing)."""
+    global _shared_searcher
+    _shared_searcher = None

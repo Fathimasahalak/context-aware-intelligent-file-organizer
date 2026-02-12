@@ -11,7 +11,7 @@ from logger import start_file_session, end_file_session
 from ml.filename_cluster import run_filename_clustering
 from ml.recommendation import get_smart_priority_files
 
-from config import DB_PATH, COLORS
+from config import DB_PATH
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename='file_organizer.log')
@@ -22,7 +22,7 @@ ctk.set_default_color_theme("blue")
 try:
     init_db()
 except Exception as e:
-    print(f"Failed to initialize database: {e}")
+    logging.error(f"Failed to initialize database: {e}")
     import sys
     sys.exit(1)
 
@@ -74,6 +74,7 @@ class ModernFileManager(ctk.CTk):
         # State
         self.current_view = "smart"  # smart, clusters, all
         self.selected_file = None
+        self.selected_files = set()  # Multi-select support
         self.semantic_searcher = None
 
         # Build UI
@@ -89,6 +90,7 @@ class ModernFileManager(ctk.CTk):
         self.bind('<Control-o>', lambda e: self.open_file())
         self.bind('<Control-f>', lambda e: self.search_entry.focus())
         self.bind('<Control-r>', lambda e: self.refresh_clusters())
+        self.bind('<Delete>', lambda e: self.delete_selected_files())
 
         logging.info("Application started")
 
@@ -259,10 +261,19 @@ class ModernFileManager(ctk.CTk):
         list_container = ctk.CTkFrame(parent, fg_color=MAIN_BG)
         list_container.pack(fill="both", expand=True, padx=0, pady=0)
         
-        # Column headers
-        headers_frame = ctk.CTkFrame(list_container, fg_color=CONTENT_BG, height=40, corner_radius=0)
-        headers_frame.pack(fill="x", padx=0, pady=0)
+        # Scrollable container for headers and rows
+        self.file_list_frame = ctk.CTkScrollableFrame(
+            list_container,
+            fg_color=MAIN_BG,
+            corner_radius=0
+        )
+        self.file_list_frame.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        # Column headers inside scrollable (tagged to preserve during clear)
+        headers_frame = ctk.CTkFrame(self.file_list_frame, fg_color=CONTENT_BG, height=40, corner_radius=0)
+        headers_frame.pack(fill="x", padx=0, pady=(0, 5))
         headers_frame.pack_propagate(False)
+        headers_frame._is_header = True
         
         headers = [
             ("Name", 0.5),
@@ -279,16 +290,8 @@ class ModernFileManager(ctk.CTk):
                 text_color=TEXT_SECONDARY,
                 anchor="w"
             )
-            header.place(relx=sum(h[1] for h in headers[:headers.index((header_text, width_ratio))]), 
-                        rely=0.5, anchor="w", relwidth=width_ratio)
-        
-        # Scrollable file list
-        self.file_list_frame = ctk.CTkScrollableFrame(
-            list_container,
-            fg_color=MAIN_BG,
-            corner_radius=0
-        )
-        self.file_list_frame.pack(fill="both", expand=True, padx=0, pady=0)
+            x_pos = sum(h[1] for h in headers[:headers.index((header_text, width_ratio))])
+            header.place(relx=x_pos, x=10, rely=0.5, anchor="w", relwidth=width_ratio)
 
     def build_status_bar(self, parent):
         """Build bottom status bar"""
@@ -337,9 +340,10 @@ class ModernFileManager(ctk.CTk):
     def load_view(self, view_name):
         """Load data for the selected view"""
         logging.info(f"Loading view {view_name}")
-        # Clear current list
+        # Clear current list (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         if view_name == "smart":
             self.load_smart_priority()
@@ -367,14 +371,15 @@ class ModernFileManager(ctk.CTk):
             self.after(0, self._display_smart_priority, files)
             
         except Exception as e:
-            print(f"Error loading smart priority: {e}")
+            logging.error(f"Error loading smart priority: {e}")
             self.after(0, lambda: self.show_empty_state("Unable to load smart priority files. Please check your database connection."))
     
     def _display_smart_priority(self, files):
         """Display smart priority files on main thread"""
-        # Clear loading state
+        # Clear loading state (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         if not files:
             self.show_empty_state("No files tracked yet. Add some files to get started!")
@@ -384,7 +389,7 @@ class ModernFileManager(ctk.CTk):
         for file_data in files:
             name = os.path.basename(file_data["path"])
             if name not in added_names:
-                self.create_file_row(file_data)
+                self.create_file_row(file_data, file_data.get("last_opened"))
                 added_names.add(name)
         
         logging.info(f"Displayed smart files: {list(added_names)}")
@@ -415,13 +420,15 @@ class ModernFileManager(ctk.CTk):
             self.after(0, self._display_clusters, clusters)
             
         except Exception as e:
-            print(f"Error loading clusters: {e}")
+            logging.error(f"Error loading clusters: {e}")
             self.after(0, lambda: self.show_empty_state("Unable to load file categories. Please check your database connection."))
     
     def _display_clusters(self, clusters):
         """Display clusters on main thread"""
+        # Clear current list (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         if not clusters:
             self.show_empty_state("No clusters yet. Click 'Refresh Clusters' to organize your files!")
@@ -456,13 +463,15 @@ class ModernFileManager(ctk.CTk):
             self.after(0, self._display_all_files, rows)
             
         except Exception as e:
-            print(f"Error loading files: {e}")
+            logging.error(f"Error loading files: {e}")
             self.after(0, lambda: self.show_empty_state("Unable to load all files. Please check your database connection."))
     
     def _display_all_files(self, rows):
         """Display all files on main thread"""
+        # Clear current list (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         if not rows:
             self.show_empty_state("No files tracked yet. Add some files to get started!")
@@ -489,19 +498,62 @@ class ModernFileManager(ctk.CTk):
         
         logging.info(f"Creating file row for {os.path.basename(path)}")
         
+        # Determine selection color
+        is_selected = path in self.selected_files
+        fg_color = SELECTED_BG if is_selected else "transparent"
+        
         # File row container
         row = ctk.CTkFrame(
             self.file_list_frame,
-            fg_color="transparent",
+            fg_color=fg_color,
             height=50,
             corner_radius=6
         )
         row.pack(fill="x", padx=10, pady=2)
         row.pack_propagate(False)
         
-        # Hover effect
-        row.bind("<Enter>", lambda e: row.configure(fg_color=HOVER_BG))
-        row.bind("<Leave>", lambda e: row.configure(fg_color="transparent"))
+        # Hover effect - preserve selection color
+        def on_enter(e):
+            if path not in self.selected_files:
+                row.configure(fg_color=HOVER_BG)
+        
+        def on_leave(e):
+            if path not in self.selected_files:
+                row.configure(fg_color="transparent")
+        
+        row.bind("<Enter>", on_enter)
+        row.bind("<Leave>", on_leave)
+        
+        # Click to select (with Ctrl for multi-select)
+        def on_click(e):
+            if e.state & 0x4:  # Ctrl key pressed (state bit 2)
+                if path in self.selected_files:
+                    self.selected_files.remove(path)
+                    row.configure(fg_color="transparent")
+                else:
+                    self.selected_files.add(path)
+                    row.configure(fg_color=SELECTED_BG)
+            else:
+                # Single select - clear others
+                self.selected_files.clear()
+                self.selected_files.add(path)
+                # Refresh to update all rows
+                self.load_view(self.current_view)
+        
+        row.bind("<Button-1>", on_click)
+        # Also bind to children widgets
+        for child in row.winfo_children():
+            child.bind("<Button-1>", lambda e, p=path: on_click(e))
+        
+        # Right-click context menu
+        def on_right_click(e):
+            self.show_context_menu(path, e.x_root, e.y_root)
+        
+        row.bind("<Button-3>", on_right_click)  # Right-click on Windows/Linux
+        row.bind("<Button-2>", on_right_click)  # Right-click on macOS
+        for child in row.winfo_children():
+            child.bind("<Button-3>", lambda e, p=path: self.show_context_menu(p, e.x_root, e.y_root))
+            child.bind("<Button-2>", lambda e, p=path: self.show_context_menu(p, e.x_root, e.y_root))
         
         # Icon + Name
         ext = os.path.splitext(path)[1].lower()
@@ -544,18 +596,31 @@ class ModernFileManager(ctk.CTk):
         )
         time_label.place(relx=0.65, rely=0.5, anchor="w", relwidth=0.2)
         
+        # Open folder button
+        folder_btn = ctk.CTkButton(
+            row,
+            text="📁",
+            command=lambda: self.open_containing_folder(path),
+            width=30,
+            height=30,
+            fg_color="transparent",
+            hover_color=HOVER_BG,
+            font=BODY_FONT
+        )
+        folder_btn.place(relx=0.85, rely=0.5, anchor="w")
+        
         # Delete button
         delete_btn = ctk.CTkButton(
             row,
             text="🗑️",
             command=lambda: self.delete_file(path),
-            width=40,
+            width=30,
             height=30,
             fg_color="transparent",
             hover_color=DELETE_COLOR,
             font=BODY_FONT
         )
-        delete_btn.place(relx=0.85, rely=0.5, anchor="w", relwidth=0.15)
+        delete_btn.place(relx=0.91, rely=0.5, anchor="w")
 
     def create_cluster_section(self, cluster_label, count, added_names):
         """Create a cluster section"""
@@ -611,23 +676,57 @@ class ModernFileManager(ctk.CTk):
                 added_names.add(name)
 
     def show_empty_state(self, message):
-        """Show empty state message"""
+        """Show empty state message with improved visual design"""
         empty_frame = ctk.CTkFrame(self.file_list_frame, fg_color="transparent")
         empty_frame.pack(expand=True, fill="both", pady=100)
         
+        # Large icon
+        icon_label = ctk.CTkLabel(
+            empty_frame,
+            text="📂",
+            font=("Segoe UI", 48),
+            text_color=TEXT_SECONDARY
+        )
+        icon_label.pack(pady=(0, 20))
+        
+        # Main message
         label = ctk.CTkLabel(
             empty_frame,
             text=message,
             font=BODY_FONT,
-            text_color=TEXT_SECONDARY
+            text_color=TEXT_SECONDARY,
+            wraplength=400
         )
-        label.pack()
+        label.pack(pady=(0, 30))
+        
+        # Quick action buttons
+        if "No files tracked" in message or "Add some files" in message:
+            add_btn = ctk.CTkButton(
+                empty_frame,
+                text="➕ Add Your First File",
+                command=self.open_file,
+                fg_color=ACCENT_COLOR,
+                hover_color="#106EBE",
+                height=40,
+                font=BODY_FONT
+            )
+            add_btn.pack(pady=5)
+        
+        # Helpful tip
+        tip_label = ctk.CTkLabel(
+            empty_frame,
+            text="💡 Tip: Press Ctrl+O to add files, Delete to remove selected",
+            font=SMALL_FONT,
+            text_color="#606060"
+        )
+        tip_label.pack(pady=(30, 0))
     
     def show_loading_state(self, message="Loading..."):
         """Show loading state"""
-        # Clear current list
+        # Clear current list (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         loading_frame = ctk.CTkFrame(self.file_list_frame, fg_color="transparent")
         loading_frame.pack(expand=True, fill="both", pady=100)
@@ -652,20 +751,10 @@ class ModernFileManager(ctk.CTk):
         self.status_label.configure(text=message)
 
     def format_time(self, timestamp_str):
-        """Format timestamp to human readable"""
+        """Format timestamp to exact date and time"""
         try:
             dt = datetime.fromisoformat(timestamp_str)
-            now = datetime.now()
-            diff = now - dt
-            
-            if diff.days == 0:
-                return "Today"
-            elif diff.days == 1:
-                return "Yesterday"
-            elif diff.days < 7:
-                return f"{diff.days} days ago"
-            else:
-                return dt.strftime("%b %d, %Y")
+            return dt.strftime("%b %d, %Y %I:%M %p")
         except:
             return "Unknown"
 
@@ -681,9 +770,10 @@ class ModernFileManager(ctk.CTk):
             messagebox.showinfo("Info", "Search query was truncated to 200 characters.")
         
         logging.info(f"Performing search: {query}")
-        # Clear current list
+        # Clear current list (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         self.status_label.configure(text="Searching...")
         
@@ -735,8 +825,10 @@ class ModernFileManager(ctk.CTk):
 
     def _update_search_results(self, results):
         """Update search results on main thread"""
+        # Clear current list (preserve headers)
         for widget in self.file_list_frame.winfo_children():
-            widget.destroy()
+            if not getattr(widget, '_is_header', False):
+                widget.destroy()
         
         if not results:
             self.show_empty_state("No results found")
@@ -765,6 +857,9 @@ class ModernFileManager(ctk.CTk):
         if not file_path:
             logging.info("File dialog canceled")
             return
+        
+        # Normalize path to prevent duplicates from different path formats
+        file_path = os.path.normpath(os.path.abspath(file_path))
         
         # Disable add button to prevent multiple additions
         self.add_btn.configure(state="disabled")
@@ -861,6 +956,69 @@ class ModernFileManager(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open file: {e}")
 
+    def open_containing_folder(self, file_path):
+        """Open the folder containing the file"""
+        try:
+            folder_path = os.path.dirname(os.path.abspath(file_path))
+            if os.path.exists(folder_path):
+                os.startfile(folder_path)
+                self.status_label.configure(text=f"Opened folder: {os.path.basename(folder_path)}")
+            else:
+                messagebox.showerror("Error", "Folder not found")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open folder: {e}")
+
+    def show_context_menu(self, file_path, x, y):
+        """Show right-click context menu for a file"""
+        menu = ctk.CTkToplevel(self)
+        menu.overrideredirect(True)  # Remove window decorations
+        menu.geometry(f"+{x}+{y}")
+        menu.configure(fg_color=CONTENT_BG)
+        
+        # Menu items
+        menu_items = [
+            ("📄 Open File", lambda: self.open_existing_file(file_path)),
+            ("📁 Open Folder", lambda: self.open_containing_folder(file_path)),
+            ("───", None),  # Separator
+            ("📋 Copy Path", lambda: self.copy_file_path(file_path)),
+            ("───", None),  # Separator
+            ("🗑️ Remove from App", lambda: self.delete_file(file_path)),
+        ]
+        
+        for text, command in menu_items:
+            if text.startswith("───"):
+                # Separator
+                separator = ctk.CTkFrame(menu, height=1, fg_color=BORDER_COLOR)
+                separator.pack(fill="x", padx=5, pady=2)
+            else:
+                btn = ctk.CTkButton(
+                    menu,
+                    text=text,
+                    command=lambda cmd=command, m=menu: (cmd(), m.destroy()),
+                    fg_color="transparent",
+                    hover_color=HOVER_BG,
+                    anchor="w",
+                    height=30,
+                    font=BODY_FONT
+                )
+                btn.pack(fill="x", padx=5, pady=1)
+        
+        # Close menu when clicking outside
+        def close_menu(event):
+            if event.widget != menu:
+                menu.destroy()
+        
+        menu.bind("<FocusOut>", lambda e: menu.destroy())
+        self.bind("<Button-1>", close_menu, add="+")
+        
+        menu.focus_set()
+
+    def copy_file_path(self, file_path):
+        """Copy file path to clipboard"""
+        self.clipboard_clear()
+        self.clipboard_append(file_path)
+        self.status_label.configure(text="Path copied to clipboard")
+
     def process_file_session(self, file_path):
         """Handle logging and waiting in background thread"""
         try:
@@ -873,7 +1031,7 @@ class ModernFileManager(ctk.CTk):
             # Removed refresh to prevent duplicate listings
             
         except Exception as e:
-            print(f"Session error: {e}")
+            logging.error(f"Session error: {e}")
 
     def delete_file(self, file_path):
         """Delete file from tracking (not from disk)"""
@@ -912,6 +1070,46 @@ class ModernFileManager(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to remove file: {e}")
 
+    def delete_selected_files(self):
+        """Delete all selected files (batch operation)"""
+        if not self.selected_files:
+            messagebox.showinfo("Info", "No files selected. Click on files to select them.")
+            return
+        
+        file_list = "\n".join([f"  • {os.path.basename(p)}" for p in self.selected_files])
+        result = messagebox.askyesno(
+            "Confirm Batch Remove",
+            f"Remove these {len(self.selected_files)} files from the app?\n(Files will remain on your disk)\n\n{file_list}"
+        )
+        
+        if not result:
+            return
+        
+        deleted_count = 0
+        for file_path in list(self.selected_files):
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.cursor()
+                cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
+                if cur.rowcount > 0:
+                    deleted_count += 1
+                    logging.info(f"Deleted file: {file_path}")
+                    # Remove from semantic search
+                    if self.semantic_searcher:
+                        self.semantic_searcher.remove_file(file_path)
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                logging.error(f"Failed to delete {file_path}: {e}")
+        
+        # Clear selection
+        self.selected_files.clear()
+        
+        # Refresh view
+        self.load_view(self.current_view)
+        self.status_label.configure(text=f"Removed {deleted_count} files")
+        messagebox.showinfo("Complete", f"Successfully removed {deleted_count} files.")
+
     def refresh_clusters(self):
         """Refresh file clusters"""
         logging.info("Refreshing clusters")
@@ -943,12 +1141,11 @@ class ModernFileManager(ctk.CTk):
             pass
 
     def _ensure_semantic_searcher(self):
-        """Lazily load SemanticSearch on first use"""
+        """Lazily load SemanticSearch singleton on first use"""
         if self.semantic_searcher is None:
             try:
-                from ml.semantic_search import SemanticSearch
-                self.semantic_searcher = SemanticSearch()
-                self.semantic_searcher.load_files()
+                from ml.semantic_search import get_semantic_searcher
+                self.semantic_searcher = get_semantic_searcher()
             except Exception as e:
                 self.semantic_searcher = None
                 messagebox.showerror("Error", f"Failed to initialize semantic search: {e}")
@@ -956,6 +1153,6 @@ class ModernFileManager(ctk.CTk):
 
 
 if __name__ == "__main__":
-    print(f"USING DATABASE: {DB_PATH}")
+    logging.info(f"USING DATABASE: {DB_PATH}")
     app = ModernFileManager()
     app.mainloop()

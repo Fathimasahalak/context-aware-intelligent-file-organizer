@@ -1,8 +1,9 @@
 import sqlite3
 import os
+import logging
 
 from config import DB_PATH
-print("USING DATABASE:", os.path.abspath(DB_PATH))
+logging.info(f"USING DATABASE: {os.path.abspath(DB_PATH)}")
 
 
 def get_connection(db_path=None):

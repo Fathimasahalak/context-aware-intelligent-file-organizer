@@ -21,7 +21,7 @@ def init_db(db_path=None):
     cur.execute("""
     CREATE TABLE IF NOT EXISTS files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        path TEXT UNIQUE,
+        path TEXT UNIQUE COLLATE NOCASE,
         access_count INTEGER DEFAULT 0,
         total_time INTEGER DEFAULT 0,
         last_opened TEXT,
@@ -42,6 +42,6 @@ def init_db(db_path=None):
     """)
 
     conn.commit()
-    cur.execute("PRAGMA journal_mode = DELETE")
+    cur.execute("PRAGMA journal_mode = WAL")
     conn.commit()
     conn.close()

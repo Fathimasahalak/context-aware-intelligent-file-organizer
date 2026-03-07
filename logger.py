@@ -79,3 +79,10 @@ def end_file_session(file_path):
     conn.close()
 
     del open_sessions[file_path]
+
+
+def remove_file_session(file_path):
+    """Clean up any active session for a deleted file."""
+    file_path = os.path.normpath(os.path.abspath(file_path))
+    if file_path in open_sessions:
+        del open_sessions[file_path]

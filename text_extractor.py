@@ -3,18 +3,29 @@ import logging
 import pdfplumber
 import zipfile
 import xml.etree.ElementTree as ET
+import subprocess
 
 # File extensions that should have full content indexed
 from config import DOCUMENT_EXTENSIONS, MAX_PDF_PAGES
 
 
-def extract_text_from_pdf(path):
+def is_tesseract_available():
+    """Check if Tesseract OCR is installed and available in the system path."""
+    try:
+        import pytesseract
+        pytesseract.get_tesseract_version()
+        return True
+    except (ImportError, EnvironmentError, Exception):
+        return False
+
+
+def extract_text_from_pdf(path, max_pages=MAX_PDF_PAGES):
     if not path.lower().endswith(".pdf"):
         return ""
     try:
         with pdfplumber.open(path) as pdf:
             # Limit pages to prevent freezing on large files
-            pages = pdf.pages[:MAX_PDF_PAGES]
+            pages = pdf.pages[:max_pages]
             pages_text = [page.extract_text() or "" for page in pages]
         return "\n".join(pages_text)
     except Exception as e:
@@ -28,7 +39,7 @@ def clean_filename_text(path):
     return name.replace("_", " ").replace("-", " ").lower()
 
 
-def get_searchable_text(path):
+def get_searchable_text(path, max_pages=MAX_PDF_PAGES):
     _, ext = os.path.splitext(path)
     ext = ext.lower()
     
@@ -46,7 +57,7 @@ def get_searchable_text(path):
             logging.error(f"Error reading text file {path}: {e}")
     
     elif ext == '.pdf':
-        content_text = extract_text_from_pdf(path)
+        content_text = extract_text_from_pdf(path, max_pages=max_pages)
     
     elif ext == '.docx':
         try:
@@ -55,8 +66,18 @@ def get_searchable_text(path):
                     tree = ET.parse(f)
                     root = tree.getroot()
                     ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-                    paragraphs = root.findall('.//w:p', ns)
-                    content_text = '\n'.join(''.join(t.text for t in p.findall('.//w:t', ns) if t.text) for p in paragraphs)
+                    
+                    # More robust extraction: find all text nodes in order
+                    # This captures text in paragraphs, tables, etc.
+                    text_parts = []
+                    for node in root.iter():
+                        if node.tag.endswith('}t') and node.text:
+                            text_parts.append(node.text)
+                        # Add space for line breaks
+                        elif node.tag.endswith('}p'):
+                            text_parts.append('\n')
+                            
+                    content_text = ''.join(text_parts)
         except Exception as e:
             logging.error(f"Error reading docx {path}: {e}")
             content_text = ""
@@ -66,11 +87,8 @@ def get_searchable_text(path):
             import pytesseract
             from PIL import Image
             
-            # Check if tesseract is installed/accessible
-            pytesseract.get_tesseract_version()
-            
-            img = Image.open(path)
-            content_text = pytesseract.image_to_string(img)
+            with Image.open(path) as img:
+                content_text = pytesseract.image_to_string(img)
         except (ImportError, EnvironmentError, Exception) as e:
             logging.warning(f"OCR extraction failed for {path}: {e}")
             content_text = ""

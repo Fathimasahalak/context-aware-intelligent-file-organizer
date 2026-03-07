@@ -1,6 +1,5 @@
 import os
 import re
-import sqlite3
 import logging
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -12,6 +11,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from config import DB_PATH, DOCUMENT_EXTENSIONS, CLUSTERING_CLUSTERS
+from database import get_connection
 
 
 def clean_filename(path):
@@ -23,7 +23,7 @@ def clean_filename(path):
     return name.strip()
 
 
-def get_cluster_label(tfidf_matrix, model, cluster_id, feature_names):
+def get_cluster_label(model, cluster_id, feature_names):
     """
     Generate a label for the cluster based on the top terms in the cluster center.
     """
@@ -38,13 +38,13 @@ def get_cluster_label(tfidf_matrix, model, cluster_id, feature_names):
     
     # Define category mappings
     category_mappings = {
-        "Work Documents": ["report", "project", "work", "business", "meeting", "email", "college"],
+        "Work Documents": ["report", "project", "work", "business", "meeting", "email"],
         "Personal Files": ["personal", "goals", "life", "diary", "journal"],
-        "Educational Materials": ["study", "course", "tutorial", "lesson", "basics", "guide", "ml", "machine", "learning", "data", "algorithm"],
-        "Financial Documents": ["invoice", "bill", "budget", "expense", "tax", "receipt"],
+        "Educational Materials": ["study", "course", "tutorial", "lesson", "basics", "guide", "ml", "machine", "learning", "data", "algorithm", "college", "university", "lecture", "homework"],
+        "Financial Documents": ["invoice", "bill", "budget", "expense", "tax", "receipt", "bank", "statement"],
         "Creative Projects": ["design", "art", "music", "video", "photo", "portfolio", "story", "tale", "novel"],
-        "Technical Docs": ["code", "programming", "api", "manual", "spec", "config", "cybersecurity", "security"],
-        "Media Files": ["image", "video", "audio", "photo", "media"],
+        "Technical Docs": ["code", "programming", "api", "manual", "spec", "config", "cybersecurity", "security", "documentation", "readme"],
+        "Media Files": ["image", "video", "audio", "photo", "media", "picture"],
         "Archives": ["archive", "backup", "old", "history"]
     }
     
@@ -68,7 +68,7 @@ def get_cluster_label(tfidf_matrix, model, cluster_id, feature_names):
 
 def run_filename_clustering(k=None, db_path=DB_PATH):
     """Cluster files by filename + content using KMeans (Dynamic)"""
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     cur = conn.cursor()
 
     # Fetch document files
@@ -131,7 +131,7 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
     cluster_labels = {}
     
     for i in range(k):
-        label = get_cluster_label(X, kmeans, i, feature_names)
+        label = get_cluster_label(kmeans, i, feature_names)
         cluster_labels[i] = label
 
     # Update database

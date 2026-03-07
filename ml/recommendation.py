@@ -1,4 +1,3 @@
-import sqlite3
 import os
 import logging
 import numpy as np
@@ -7,6 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from config import DB_PATH
 from ml.semantic_search import get_semantic_searcher
+from database import get_connection
 
 # Weights for the hybrid score
 W_RECENCY = 0.4
@@ -19,7 +19,7 @@ def get_smart_priority_files(limit=20):
     Returns a list of files sorted by Smart Priority Score.
     Score = Recency + Frequency + Context (Similarity to last opened)
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection(DB_PATH)
     cur = conn.cursor()
     
     # 1. Get all files with stats
@@ -54,6 +54,7 @@ def get_smart_priority_files(limit=20):
     id_to_idx = {fid: i for i, fid in enumerate(searcher.file_ids)}
     
     # context vector
+    similarities = None
     if last_file_id in id_to_idx:
         context_idx = id_to_idx[last_file_id]
         
@@ -64,13 +65,10 @@ def get_smart_priority_files(limit=20):
             # Calculate similarities for all files
             # Reshape for single sample
             similarities = cosine_similarity([context_vector], searcher.vectors)[0]
-        else:
-            # Index out of bounds or no vectors, use zeros
-            num_vectors = len(searcher.vectors) if searcher.vectors is not None else 1
-            similarities = np.zeros(num_vectors)
-    else:
-        # Fallback if last file has no embedding (e.g. image or too new)
-        num_vectors = len(searcher.vectors) if searcher.vectors is not None else 1
+    
+    # Fallback for similarities
+    if similarities is None:
+        num_vectors = len(searcher.vectors) if searcher.vectors is not None else 0
         similarities = np.zeros(num_vectors)
 
     # 4. Calculate Scores
@@ -79,7 +77,7 @@ def get_smart_priority_files(limit=20):
 
     # Pre-calculate max values for normalization
     counts = [r[2] for r in rows]
-    max_count = max(counts) if counts else 1
+    max_count = max(1, max(counts) if counts else 1)
     
     for fid in file_ids:
         data = file_map[fid]

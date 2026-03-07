@@ -8,8 +8,8 @@ import subprocess
 import sys
 from datetime import datetime
 
-from database import init_db
-from logger import start_file_session, end_file_session
+from database import init_db, get_connection
+from logger import start_file_session, end_file_session, remove_file_session
 from ml.filename_cluster import run_filename_clustering
 from ml.recommendation import get_smart_priority_files
 
@@ -88,6 +88,8 @@ class ModernFileManager(ctk.CTk):
         self.selected_file = None
         self.selected_files = set()  # Multi-select support
         self.semantic_searcher = None
+        self.needs_cluster_refresh = False
+        self.active_context_menu = None
 
         # Build UI
         self.build_ui()
@@ -95,8 +97,17 @@ class ModernFileManager(ctk.CTk):
         # Load initial data
         self.load_view("smart")
         
+        # Check for Tesseract
+        self._check_tesseract()
+        
         # Run clustering if needed
         self._ensure_clustering()
+
+    def _check_tesseract(self):
+        """Check if Tesseract is available and log status"""
+        from text_extractor import is_tesseract_available
+        if not is_tesseract_available():
+            logging.info("Tesseract OCR not found. Image text extraction is disabled (Standard behavior).")
 
         # Keyboard shortcuts
         self.bind('<Control-o>', lambda e: self.open_file())
@@ -401,27 +412,32 @@ class ModernFileManager(ctk.CTk):
             self.show_empty_state("No files tracked yet. Add some files to get started!")
             return
         
-        added_names = set()
+        added_paths = set()
         for file_data in files:
-            name = os.path.basename(file_data["path"])
-            if name not in added_names:
+            # Normalize path for accurate deduplication
+            norm_path = os.path.normpath(os.path.abspath(file_data["path"]))
+            if norm_path not in added_paths:
                 self.create_file_row(file_data, file_data.get("last_opened"))
-                added_names.add(name)
+                added_paths.add(norm_path)
         
-        logging.info(f"Displayed smart files: {list(added_names)}")
-        self.file_count_label.configure(text=f"{len(added_names)} files")
+        logging.info(f"Displayed smart files: {list(added_paths)}")
+        self.file_count_label.configure(text=f"{len(added_paths)} files")
         self.status_label.configure(text="Smart priority loaded")
 
 
     def load_clusters(self):
-        """Load clustered files"""
-        self.show_loading_state("Loading categories...")
-        threading.Thread(target=self._load_clusters_async, daemon=True).start()
+        """Load clustered files with smart auto-refresh"""
+        if self.needs_cluster_refresh:
+            logging.info("Smart Refresh: New files detected, refreshing clusters...")
+            self.refresh_clusters()
+        else:
+            self.show_loading_state("Loading categories...")
+            threading.Thread(target=self._load_clusters_async, daemon=True).start()
     
     def _load_clusters_async(self):
         """Load clusters in background"""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection(DB_PATH)
             cur = conn.cursor()
             cur.execute("""
                 SELECT cluster_label, COUNT(*) as count
@@ -450,11 +466,11 @@ class ModernFileManager(ctk.CTk):
             self.show_empty_state("No clusters yet. Click 'Refresh Clusters' to organize your files!")
             return
         
-        added_names = set()
+        added_paths = set()
         for cluster_label, count in clusters:
-            self.create_cluster_section(cluster_label, count, added_names)
+            self.create_cluster_section(cluster_label, count, added_paths)
         
-        total_files = len(added_names)
+        total_files = len(added_paths)
         self.file_count_label.configure(text=f"{total_files} files in {len(clusters)} categories")
         self.status_label.configure(text="Categories loaded")
 
@@ -466,7 +482,7 @@ class ModernFileManager(ctk.CTk):
     def _load_all_files_async(self):
         """Load all files in background"""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection(DB_PATH)
             cur = conn.cursor()
             cur.execute("""
                 SELECT path, access_count, last_opened
@@ -493,19 +509,20 @@ class ModernFileManager(ctk.CTk):
             self.show_empty_state("No files tracked yet. Add some files to get started!")
             return
         
-        added_names = set()
+        added_paths = set()
         for path, count, last_opened in rows:
-            name = os.path.basename(path)
-            if name not in added_names:
+            # Normalize path for accurate deduplication
+            norm_path = os.path.normpath(os.path.abspath(path))
+            if norm_path not in added_paths:
                 file_data = {
                     "path": path,
                     "score": count / 10.0,  # Normalize
                     "reasons": {"Freq": str(count)}
                 }
                 self.create_file_row(file_data, last_opened)
-                added_names.add(name)
+                added_paths.add(norm_path)
         
-        self.file_count_label.configure(text=f"{len(added_names)} files")
+        self.file_count_label.configure(text=f"{len(added_paths)} files")
         self.status_label.configure(text="All files loaded")
 
     def create_file_row(self, file_data, last_opened=None):
@@ -638,7 +655,7 @@ class ModernFileManager(ctk.CTk):
         )
         delete_btn.place(relx=0.91, rely=0.5, anchor="w")
 
-    def create_cluster_section(self, cluster_label, count, added_names):
+    def create_cluster_section(self, cluster_label, count, added_paths):
         """Create a cluster section"""
         # Cluster header
         header = ctk.CTkFrame(
@@ -668,7 +685,7 @@ class ModernFileManager(ctk.CTk):
         count_label.pack(side="right", padx=15, pady=10)
         
         # Load files in this cluster
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection(DB_PATH)
         cur = conn.cursor()
         cur.execute("""
             SELECT path, access_count, last_opened
@@ -681,15 +698,15 @@ class ModernFileManager(ctk.CTk):
         conn.close()
         
         for path, count, last_opened in files:
-            name = os.path.basename(path)
-            if name not in added_names:
+            norm_path = os.path.normpath(os.path.abspath(path))
+            if norm_path not in added_paths:
                 file_data = {
                     "path": path,
                     "score": count / 10.0,
                     "reasons": {}
                 }
                 self.create_file_row(file_data, last_opened)
-                added_names.add(name)
+                added_paths.add(norm_path)
 
     def show_empty_state(self, message):
         """Show empty state message with improved visual design"""
@@ -782,9 +799,9 @@ class ModernFileManager(ctk.CTk):
             return
         
         # Sanitize query
-        if len(query) > 200:
-            query = query[:200]
-            messagebox.showinfo("Info", "Search query was truncated to 200 characters.")
+        if len(query) > 500: # Increased limit
+            query = query[:500]
+            messagebox.showinfo("Info", "Search query was truncated to 500 characters.")
         
         logging.info(f"Performing search: {query}")
         # Clear current list (preserve headers)
@@ -807,23 +824,21 @@ class ModernFileManager(ctk.CTk):
             threshold = 0.2
             semantic_results = [r for r in semantic_results if r["score"] >= threshold]
             
-            # Add keyword matches as fallback only if no semantic results
+            # Add keyword matches
+            conn = get_connection(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT id, path FROM files WHERE lower(searchable_text) LIKE lower(?)", ('%' + query + '%',))
+            keyword_rows = cur.fetchall()
+            conn.close()
+            
             keyword_results = []
-            if len(semantic_results) == 0:
-                conn = sqlite3.connect(DB_PATH)
-                cur = conn.cursor()
-                cur.execute("SELECT id, path FROM files WHERE lower(searchable_text) LIKE lower(?)", ('%' + query + '%',))
-                keyword_rows = cur.fetchall()
-                conn.close()
-                
-                for row in keyword_rows:
-                    file_id, path = row
-                    # Check if not already in semantic results (though none)
-                    keyword_results.append({
-                        "file_id": file_id,
-                        "path": path,
-                        "score": 0.5  # Lower score for keyword matches
-                    })
+            for row in keyword_rows:
+                file_id, path = row
+                keyword_results.append({
+                    "file_id": file_id,
+                    "path": path,
+                    "score": 0.5  # Fixed score for keyword matches
+                })
             
             # Combine and sort results
             all_results_dict = {}
@@ -833,11 +848,12 @@ class ModernFileManager(ctk.CTk):
                     all_results_dict[path] = r
             all_results = list(all_results_dict.values())
             all_results.sort(key=lambda x: x['score'], reverse=True)
-            results = all_results[:10]  # Limit to top 10
+            results = all_results[:15]  # Limit to top 15
             
             # Update UI on main thread
             self.after(0, self._update_search_results, results)
         except Exception as e:
+            logging.error(f"Search error: {e}")
             self.after(0, lambda: self.status_label.configure(text="Search failed. Please try again."))
 
     def _update_search_results(self, results):
@@ -854,7 +870,7 @@ class ModernFileManager(ctk.CTk):
         
         seen = set()
         for result in results:
-            norm_path = os.path.normcase(result["path"])
+            norm_path = os.path.normcase(os.path.normpath(os.path.abspath(result["path"])))
             if norm_path not in seen:
                 file_data = {
                     "path": result["path"],
@@ -889,7 +905,7 @@ class ModernFileManager(ctk.CTk):
             return
         
         # Check if file already added
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT id FROM files WHERE lower(path) = lower(?)", (file_path,))
         if cur.fetchone():
@@ -919,7 +935,7 @@ class ModernFileManager(ctk.CTk):
             
             logging.info(f"Added file {file_path} with searchable_text snippet: {searchable_text[:100]}")
             
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection(DB_PATH)
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO files(path, searchable_text, access_count, last_opened)
@@ -933,13 +949,17 @@ class ModernFileManager(ctk.CTk):
             
         except Exception as e:
             logging.error(f"Failed to add file: {e}")
-            self.after(0, lambda: messagebox.showerror("Error", f"Failed to add file: {e}"))
+            self.after(0, lambda err=e: messagebox.showerror("Error", f"Failed to add file: {err}"))
             self.after(0, lambda: self.add_btn.configure(state="normal"))
+
 
     def _on_file_added_success(self, file_path):
         """Callback for successful file addition"""
         self.status_label.configure(text=f"Added: {os.path.basename(file_path)}")
         self.add_btn.configure(state="normal")
+        
+        # Mark for clustering refresh
+        self.needs_cluster_refresh = True
         
         # Refresh semantic searcher to include the new file
         if self.semantic_searcher:
@@ -955,7 +975,7 @@ class ModernFileManager(ctk.CTk):
         """Open an existing tracked file"""
         try:
             # Ensure absolute path
-            file_path = os.path.abspath(file_path)
+            file_path = os.path.normpath(os.path.abspath(file_path))
             
             if not os.path.exists(file_path):
                 messagebox.showerror("Error", f"File not found on disk:\n{file_path}")
@@ -989,9 +1009,14 @@ class ModernFileManager(ctk.CTk):
             messagebox.showerror("Error", f"Failed to open folder: {e}")
 
     def show_context_menu(self, file_path, x, y):
-        """Show right-click context menu for a file"""
+        """Show right-click context menu for a file with proper cleanup"""
+        # Cleanup existing menu if any
+        if self.active_context_menu and self.active_context_menu.winfo_exists():
+            self.active_context_menu.destroy()
+            
         menu = ctk.CTkToplevel(self)
-        menu.overrideredirect(True)  # Remove window decorations
+        self.active_context_menu = menu
+        menu.overrideredirect(True)
         menu.geometry(f"+{x}+{y}")
         menu.configure(fg_color=SURFACE_CONTAINER)
         
@@ -999,15 +1024,14 @@ class ModernFileManager(ctk.CTk):
         menu_items = [
             ("📄 Open File", lambda: self.open_existing_file(file_path)),
             ("📁 Open Folder", lambda: self.open_containing_folder(file_path)),
-            ("───", None),  # Separator
+            ("───", None),
             ("📋 Copy Path", lambda: self.copy_file_path(file_path)),
-            ("───", None),  # Separator
+            ("───", None),
             ("🗑️ Remove from App", lambda: self.delete_file(file_path)),
         ]
         
         for text, command in menu_items:
             if text.startswith("───"):
-                # Separator
                 separator = ctk.CTkFrame(menu, height=1, fg_color=OUTLINE)
                 separator.pack(fill="x", padx=5, pady=2)
             else:
@@ -1023,15 +1047,14 @@ class ModernFileManager(ctk.CTk):
                 )
                 btn.pack(fill="x", padx=5, pady=1)
         
-        # Close menu when clicking outside
-        def close_menu(event):
-            if event.widget != menu:
+        # Proper modal behavior: Close when clicking away
+        def on_focus_out(event):
+            if menu.winfo_exists():
                 menu.destroy()
-        
-        menu.bind("<FocusOut>", lambda e: menu.destroy())
-        self.bind("<Button-1>", close_menu, add="+")
-        
+                
+        menu.bind("<FocusOut>", on_focus_out)
         menu.focus_set()
+        menu.grab_set() # Capture all events until closed
 
     def copy_file_path(self, file_path):
         """Copy file path to clipboard"""
@@ -1065,7 +1088,7 @@ class ModernFileManager(ctk.CTk):
                 return
             
             # Remove from database
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection(DB_PATH)
             cur = conn.cursor()
             cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
             deleted_count = cur.rowcount
@@ -1078,9 +1101,15 @@ class ModernFileManager(ctk.CTk):
                 messagebox.showwarning("Warning", "File was not found in the database. It may have already been removed.")
                 return
             
+            # Mark for clustering refresh
+            self.needs_cluster_refresh = True
+            
             # Remove from semantic search
             if self.semantic_searcher:
                 self.semantic_searcher.remove_file(file_path)
+            
+            # Remove from active sessions
+            remove_file_session(file_path)
             
             # Refresh view
             self.load_view(self.current_view)
@@ -1108,7 +1137,7 @@ class ModernFileManager(ctk.CTk):
         deleted_count = 0
         for file_path in list(self.selected_files):
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = get_connection(DB_PATH)
                 cur = conn.cursor()
                 cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
                 if cur.rowcount > 0:
@@ -1117,11 +1146,17 @@ class ModernFileManager(ctk.CTk):
                     # Remove from semantic search
                     if self.semantic_searcher:
                         self.semantic_searcher.remove_file(file_path)
+                    # Remove from active sessions
+                    remove_file_session(file_path)
                 conn.commit()
                 conn.close()
             except Exception as e:
                 logging.error(f"Failed to delete {file_path}: {e}")
         
+        # Mark for clustering refresh
+        if deleted_count > 0:
+            self.needs_cluster_refresh = True
+            
         # Clear selection
         self.selected_files.clear()
         
@@ -1131,13 +1166,14 @@ class ModernFileManager(ctk.CTk):
         messagebox.showinfo("Complete", f"Successfully removed {deleted_count} files.")
 
     def refresh_clusters(self):
-        """Refresh file clusters"""
+        """Refresh file clusters with visual feedback"""
         logging.info("Refreshing clusters")
-        self.status_label.configure(text="Clustering files...")
+        self.show_loading_state("Clustering files...")
         
         def do_cluster():
             try:
                 run_filename_clustering()
+                self.needs_cluster_refresh = False
                 self.after(0, lambda: self.status_label.configure(text="Clustering complete"))
                 self.after(0, lambda: self.load_view(self.current_view))
             except Exception as e:
@@ -1149,26 +1185,33 @@ class ModernFileManager(ctk.CTk):
     def _ensure_clustering(self):
         """Run clustering on startup if needed"""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection(DB_PATH)
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM files WHERE cluster_label IS NOT NULL")
-            clustered_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM files WHERE cluster_label IS NULL")
+            unclustered_count = cur.fetchone()[0]
             conn.close()
             
-            if clustered_count == 0:
-                threading.Thread(target=lambda: run_filename_clustering(), daemon=True).start()
+            if unclustered_count > 0:
+                self.needs_cluster_refresh = True
         except:
             pass
 
     def _ensure_semantic_searcher(self):
-        """Lazily load SemanticSearch singleton on first use"""
+        """Lazily load SemanticSearch singleton on first use with status updates"""
         if self.semantic_searcher is None:
             try:
+                # Update status if we're on the main thread, otherwise use after
+                status_msg = "Initializing AI Model (First run may take a minute)..."
+                self.after(0, lambda: self.status_label.configure(text=status_msg))
+                
                 from ml.semantic_search import get_semantic_searcher
                 self.semantic_searcher = get_semantic_searcher()
+                
+                self.after(0, lambda: self.status_label.configure(text="AI Model Ready"))
             except Exception as e:
                 self.semantic_searcher = None
-                messagebox.showerror("Error", f"Failed to initialize semantic search: {e}")
+                logging.error(f"Failed to initialize semantic search: {e}")
+                self.after(0, lambda: messagebox.showerror("Error", f"Failed to initialize semantic search: {e}"))
         return self.semantic_searcher
 
 

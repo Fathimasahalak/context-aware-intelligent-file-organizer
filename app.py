@@ -529,8 +529,6 @@ class ModernFileManager(ctk.CTk):
         """Create a file row in the list"""
         path = file_data["path"]
         
-        logging.info(f"Creating file row for {os.path.basename(path)}")
-        
         # Determine selection color
         is_selected = path in self.selected_files
         fg_color = PRIMARY_CONTAINER if is_selected else "transparent"
@@ -544,7 +542,8 @@ class ModernFileManager(ctk.CTk):
         )
         row.pack(fill="x", padx=10, pady=2)
         row.pack_propagate(False)
-        
+        row._path = path # Store path for easy access
+
         # Hover effect - preserve selection color
         def on_enter(e):
             if path not in self.selected_files:
@@ -554,12 +553,9 @@ class ModernFileManager(ctk.CTk):
             if path not in self.selected_files:
                 row.configure(fg_color="transparent")
         
-        row.bind("<Enter>", on_enter)
-        row.bind("<Leave>", on_leave)
-        
         # Click to select (with Ctrl for multi-select)
         def on_click(e):
-            if e.state & 0x4:  # Ctrl key pressed (state bit 2)
+            if e.state & 0x4:  # Ctrl key pressed
                 if path in self.selected_files:
                     self.selected_files.remove(path)
                     row.configure(fg_color="transparent")
@@ -567,27 +563,20 @@ class ModernFileManager(ctk.CTk):
                     self.selected_files.add(path)
                     row.configure(fg_color=PRIMARY_CONTAINER)
             else:
-                # Single select - clear others
+                # Single select - Clear previous selections visually
+                # instead of calling load_view (which destroys widgets)
+                for child in self.file_list_frame.winfo_children():
+                    if hasattr(child, "_path"):
+                        if child._path in self.selected_files:
+                            child.configure(fg_color="transparent")
+                
                 self.selected_files.clear()
                 self.selected_files.add(path)
-                # Refresh to update all rows
-                self.load_view(self.current_view)
+                row.configure(fg_color=PRIMARY_CONTAINER)
         
-        row.bind("<Button-1>", on_click)
-        # Also bind to children widgets
-        for child in row.winfo_children():
-            child.bind("<Button-1>", lambda e, p=path: on_click(e))
-        
-        # Right-click context menu
         def on_right_click(e):
             self.show_context_menu(path, e.x_root, e.y_root)
-        
-        row.bind("<Button-3>", on_right_click)  # Right-click on Windows/Linux
-        row.bind("<Button-2>", on_right_click)  # Right-click on macOS
-        for child in row.winfo_children():
-            child.bind("<Button-3>", lambda e, p=path: self.show_context_menu(p, e.x_root, e.y_root))
-            child.bind("<Button-2>", lambda e, p=path: self.show_context_menu(p, e.x_root, e.y_root))
-        
+
         # Icon + Name
         ext = os.path.splitext(path)[1].lower()
         icon = FILE_ICONS.get(ext, FILE_ICONS["default"])
@@ -601,7 +590,6 @@ class ModernFileManager(ctk.CTk):
             anchor="w"
         )
         name_label.place(relx=0, rely=0.5, anchor="w", relwidth=0.5)
-        name_label.bind("<Double-Button-1>", lambda e: self.open_existing_file(path))
         
         # Type
         file_type = ext[1:].upper() if ext else "FILE"
@@ -615,11 +603,7 @@ class ModernFileManager(ctk.CTk):
         type_label.place(relx=0.5, rely=0.5, anchor="w", relwidth=0.15)
         
         # Last Opened
-        if last_opened:
-            time_text = self.format_time(last_opened)
-        else:
-            time_text = "Recently"
-        
+        time_text = self.format_time(last_opened) if last_opened else "Recently"
         time_label = ctk.CTkLabel(
             row,
             text=time_text,
@@ -631,29 +615,35 @@ class ModernFileManager(ctk.CTk):
         
         # Open folder button
         folder_btn = ctk.CTkButton(
-            row,
-            text="📁",
+            row, text="📁",
             command=lambda: self.open_containing_folder(path),
-            width=30,
-            height=30,
-            fg_color="transparent",
-            hover_color=SURFACE_CONTAINER_HIGH,
-            font=BODY_FONT
+            width=30, height=30, fg_color="transparent",
+            hover_color=SURFACE_CONTAINER_HIGH, font=BODY_FONT
         )
         folder_btn.place(relx=0.85, rely=0.5, anchor="w")
         
         # Delete button
         delete_btn = ctk.CTkButton(
-            row,
-            text="🗑️",
+            row, text="🗑️",
             command=lambda: self.delete_file(path),
-            width=30,
-            height=30,
-            fg_color="transparent",
-            hover_color=ERROR,
-            font=BODY_FONT
+            width=30, height=30, fg_color="transparent",
+            hover_color=ERROR, font=BODY_FONT
         )
         delete_btn.place(relx=0.91, rely=0.5, anchor="w")
+
+        # --- EVENT BINDINGS ---
+        interactive_widgets = [row, name_label, type_label, time_label]
+        
+        for w in interactive_widgets:
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave)
+            w.bind("<Button-1>", on_click)
+            w.bind("<Button-3>", on_right_click)
+            w.bind("<Button-2>", on_right_click)
+            
+        # Double click to open
+        row.bind("<Double-Button-1>", lambda e: self.open_existing_file(path))
+        name_label.bind("<Double-Button-1>", lambda e: self.open_existing_file(path))
 
     def create_cluster_section(self, cluster_label, count, added_paths):
         """Create a cluster section"""
@@ -815,46 +805,107 @@ class ModernFileManager(ctk.CTk):
         threading.Thread(target=self._do_search, args=(query,), daemon=True).start()
 
     def _do_search(self, query):
-        """Perform search in background"""
+        """Perform search in background with strict relevance filtering and short-query protection"""
         try:
             searcher = self._ensure_semantic_searcher()
-            semantic_results = searcher.search(query, top_k=10)
+            query_lower = query.lower()
             
-            # Filter semantic results by threshold
-            threshold = 0.2
-            semantic_results = [r for r in semantic_results if r["score"] >= threshold]
-            
-            # Add keyword matches
+            # 1. Keyword & Extension Results (The most accurate)
             conn = get_connection(DB_PATH)
             cur = conn.cursor()
-            cur.execute("SELECT id, path FROM files WHERE lower(searchable_text) LIKE lower(?)", ('%' + query + '%',))
+            
+            # Look for query in path or content
+            cur.execute("""
+                SELECT id, path, searchable_text FROM files 
+                WHERE lower(path) LIKE ? 
+                OR lower(searchable_text) LIKE ?
+            """, ('%' + query_lower + '%', '%' + query_lower + '%'))
             keyword_rows = cur.fetchall()
             conn.close()
             
-            keyword_results = []
-            for row in keyword_rows:
-                file_id, path = row
-                keyword_results.append({
-                    "file_id": file_id,
-                    "path": path,
-                    "score": 0.5  # Fixed score for keyword matches
-                })
+            # 2. AI Semantic Results (The "smart" guesses)
+            semantic_results = searcher.search(query, top_k=15)
             
-            # Combine and sort results
+            # Combine into a master dictionary
             all_results_dict = {}
-            for r in semantic_results + keyword_results:
+            import re
+            
+            # Process Keywords first (High priority)
+            for row in keyword_rows:
+                fid, path, body_text = row
+                basename = os.path.basename(path).lower()
+                ext = os.path.splitext(basename)[1].lower()
+                
+                # --- NEW: WHOLE WORD PROTECTION ---
+                # If query is short (like 'cat'), ensure it matches a WHOLE word in the text/path
+                # This prevents matching 'cat' in 'education' or 'application'
+                if len(query_lower) <= 3:
+                    # Check if it's a whole word in either filename or body
+                    found_as_word = False
+                    if re.search(r'\b' + re.escape(query_lower) + r'\b', basename):
+                        found_as_word = True
+                    elif body_text and re.search(r'\b' + re.escape(query_lower) + r'\b', body_text.lower()):
+                        found_as_word = True
+                    
+                    if not found_as_word:
+                        continue # Skip this 'false' match
+                # ----------------------------------
+
+                score = 0.4 # Base keyword score
+                
+                # Boost if query is in filename
+                if query_lower in basename:
+                    score = 0.8
+                    # Huge boost for exact filename match (without extension)
+                    if query_lower == basename or query_lower == os.path.splitext(basename)[0]:
+                        score = 1.0
+                    # Boost for whole-word matches in filename (e.g. "cat" in "my cat.mp4")
+                    if re.search(r'\b' + re.escape(query_lower) + r'\b', basename):
+                        score = max(score, 0.95)
+                        
+                # Boost if searching for an extension (e.g. "docx" matches ".docx")
+                elif query_lower == ext[1:] or (query_lower.startswith('.') and query_lower == ext):
+                    score = 0.9
+                
+                all_results_dict[path] = {
+                    "file_id": fid,
+                    "path": path,
+                    "score": score
+                }
+            
+            # Process AI Results (Suggestion mode)
+            # Threshold logic: Short queries need higher confidence
+            base_threshold = 0.45
+            if len(query_lower) <= 3:
+                base_threshold = 0.6 # Strict threshold for short words like "cat"
+                
+            for r in semantic_results:
                 path = r["path"]
-                if path not in all_results_dict or r["score"] > all_results_dict[path]["score"]:
-                    all_results_dict[path] = r
-            all_results = list(all_results_dict.values())
-            all_results.sort(key=lambda x: x['score'], reverse=True)
-            results = all_results[:15]  # Limit to top 15
+                ai_score = r["score"]
+                
+                if ai_score >= base_threshold:
+                    if path in all_results_dict:
+                        # If both match, take the best score
+                        all_results_dict[path]["score"] = max(all_results_dict[path]["score"], ai_score)
+                    else:
+                        # Pure AI result - give it a slight penalty so it stays below
+                        # exact keyword matches unless the AI is VERY confident
+                        all_results_dict[path] = {
+                            "file_id": r["file_id"],
+                            "path": path,
+                            "score": ai_score * 0.85 # 15% penalty for purely semantic "guesses"
+                        }
+            
+            # Final sorting
+            results = list(all_results_dict.values())
+            results.sort(key=lambda x: x['score'], reverse=True)
             
             # Update UI on main thread
-            self.after(0, self._update_search_results, results)
+            self.after(0, self._update_search_results, results[:20])
+            
         except Exception as e:
             logging.error(f"Search error: {e}")
-            self.after(0, lambda: self.status_label.configure(text="Search failed. Please try again."))
+            self.after(0, lambda: self.status_label.configure(text="Search failed."))
 
     def _update_search_results(self, results):
         """Update search results on main thread"""

@@ -74,16 +74,20 @@ class SemanticSearch:
                 self.model = None
         return self.model
 
-    def load_files(self):
-        """Sync database files with the semantic vector cache."""
+    def load_files(self, force_rebuild=False):
+        """Sync database files with the semantic vector cache.
+        
+        Args:
+            force_rebuild (bool): If True, ignores disk cache and re-encodes everything.
+        """
         from database import get_connection
         conn = get_connection(self.db_path)
         cur = conn.cursor()
         try:
+            # We only index files that have text OR a name
             cur.execute("""
                 SELECT id, path, searchable_text 
                 FROM files 
-                WHERE searchable_text IS NOT NULL AND searchable_text != ''
                 ORDER BY id ASC
             """)
             rows = cur.fetchall()
@@ -96,72 +100,58 @@ class SemanticSearch:
             self.vectors = np.array([])
             return
 
-        # Current files in database
         db_ids = [r[0] for r in rows]
         db_paths = [r[1] for r in rows]
-        db_texts = [r[2] for r in rows]
+        # Use text if available, otherwise use filename
+        db_texts = [r[2] if (r[2] and r[2].strip()) else os.path.basename(r[1]) for r in rows]
 
-        # Limit cache size to prevent excessive disk usage
-        if len(db_ids) > MAX_CACHE_FILES:
-            logging.warning(f"Warning: Too many files ({len(db_ids)}) for caching. Limiting to {MAX_CACHE_FILES} most recent.")
-            db_ids = db_ids[-MAX_CACHE_FILES:]
-            db_paths = db_paths[-MAX_CACHE_FILES:]
-            db_texts = db_texts[-MAX_CACHE_FILES:]
-
-        # Load existing cache if available
-        cached_ids = []
-        cached_vectors = None
-        if os.path.exists(ID_CACHE) and os.path.exists(EMBEDDING_CACHE):
+        # 1. Load existing cache from disk
+        id_to_vec = {}
+        if not force_rebuild and os.path.exists(ID_CACHE) and os.path.exists(EMBEDDING_CACHE):
             try:
                 cached_ids = np.load(ID_CACHE).tolist()
                 cached_vectors = np.load(EMBEDDING_CACHE)
+                if len(cached_ids) == len(cached_vectors):
+                    for i, fid in enumerate(cached_ids):
+                        id_to_vec[fid] = cached_vectors[i]
             except Exception as e:
-                logging.warning(f"Failed to load embedding cache: {e}")
+                logging.warning(f"Cache corrupt, rebuilding: {e}")
 
-        # Map for fast lookup: ID -> Vector
-        id_to_vec = {}
-        if cached_vectors is not None and len(cached_ids) == len(cached_vectors):
-            for i, fid in enumerate(cached_ids):
-                id_to_vec[fid] = cached_vectors[i]
-
-        # Determine which files need new embeddings
+        # 2. Build final vector list
         final_vectors = []
-        new_texts = []
-        new_text_indices = []
+        texts_to_encode = []
+        indices_to_encode = []
 
         for i, fid in enumerate(db_ids):
             if fid in id_to_vec:
-                # Existing vector found
                 final_vectors.append(id_to_vec[fid])
             else:
-                # Missing vector: Mark for encoding
-                final_vectors.append(None) # Placeholder
-                new_texts.append(db_texts[i])
-                new_text_indices.append(i)
+                final_vectors.append(None) # Mark for encoding
+                texts_to_encode.append(db_texts[i])
+                indices_to_encode.append(len(final_vectors) - 1)
 
-        # Compute new embeddings if needed
-        if new_texts:
+        # 3. Encode new content if needed
+        if texts_to_encode:
             model = self.get_model()
             if model:
-                logging.info(f"Embedding {len(new_texts)} new files...")
-                new_vecs = model.encode(new_texts, show_progress_bar=True)
-                # Fill placeholders
+                logging.info(f"AI is learning {len(texts_to_encode)} new files...")
+                new_vecs = model.encode(texts_to_encode, show_progress_bar=True)
                 for i, vec in enumerate(new_vecs):
-                    final_vectors[new_text_indices[i]] = vec
+                    final_vectors[indices_to_encode[i]] = vec
             else:
-                # Fallback: remove placeholders if model failed
-                logging.error("Model unavailable. New files will not be searchable semantically.")
+                # Cleanup if model fails: remove files that couldn't be encoded
+                valid_indices = [i for i, v in enumerate(final_vectors) if v is not None]
+                db_ids = [db_ids[i] for i in valid_indices]
+                db_paths = [db_paths[i] for i in valid_indices]
                 final_vectors = [v for v in final_vectors if v is not None]
-                db_ids = [db_ids[i] for i, v in enumerate(final_vectors) if v is not None]
-                db_paths = [db_paths[i] for i, v in enumerate(final_vectors) if v is not None]
 
-        # Convert back to numpy and update instance state
+        # 4. Final state update
         if final_vectors:
             self.vectors = np.array(final_vectors)
             self.file_ids = db_ids
             self.file_paths = db_paths
-            # Update cache on disk for next run
             self.save_cache()
+            logging.info(f"Search index ready with {len(self.file_ids)} files.")
         else:
             self.vectors = np.array([])
             self.file_ids = []

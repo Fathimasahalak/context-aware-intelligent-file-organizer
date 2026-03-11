@@ -17,12 +17,13 @@ def simulate_search_logic(query, files_in_db, ai_results):
     for fid, path, body_text in files_in_db:
         basename = os.path.basename(path).lower()
         
-        # WHOLE WORD PROTECTION (The fix we just added)
+        # WHOLE WORD PROTECTION (Including underscores as boundaries)
         if len(query_lower) <= 3:
             found_as_word = False
-            if re.search(r'\b' + re.escape(query_lower) + r'\b', basename):
+            pattern = r'(?:\b|_)' + re.escape(query_lower) + r'(?:\b|_)'
+            if re.search(pattern, basename):
                 found_as_word = True
-            elif body_text and re.search(r'\b' + re.escape(query_lower) + r'\b', body_text.lower()):
+            elif body_text and re.search(pattern, body_text.lower()):
                 found_as_word = True
             
             if not found_as_word:
@@ -32,7 +33,8 @@ def simulate_search_logic(query, files_in_db, ai_results):
         if query_lower in basename:
             score = 0.8
             if query_lower == basename: score = 1.0
-            if re.search(r'\b' + re.escape(query_lower) + r'\b', basename):
+            pattern = r'(?:\b|_)' + re.escape(query_lower) + r'(?:\b|_)'
+            if re.search(pattern, basename):
                 score = max(score, 0.95)
         
         all_results_dict[path] = {"path": path, "score": score}

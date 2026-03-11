@@ -4,11 +4,6 @@ import logging
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
-from collections import Counter
-
-# Add parent directory to path for imports
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from config import DB_PATH, DOCUMENT_EXTENSIONS, CLUSTERING_CLUSTERS
 from database import get_connection
@@ -36,34 +31,43 @@ def get_cluster_label(model, cluster_id, feature_names):
     # Get top 5 terms for better matching
     top_terms = [feature_names[i] for i in top_indices[:5]]
     
-    # Define category mappings
+    # Define category mappings with broader keywords
     category_mappings = {
-        "Work Documents": ["report", "project", "work", "business", "meeting", "email"],
-        "Personal Files": ["personal", "goals", "life", "diary", "journal"],
-        "Educational Materials": ["study", "course", "tutorial", "lesson", "basics", "guide", "ml", "machine", "learning", "data", "algorithm", "college", "university", "lecture", "homework"],
-        "Financial Documents": ["invoice", "bill", "budget", "expense", "tax", "receipt", "bank", "statement"],
-        "Creative Projects": ["design", "art", "music", "video", "photo", "portfolio", "story", "tale", "novel"],
-        "Technical Docs": ["code", "programming", "api", "manual", "spec", "config", "cybersecurity", "security", "documentation", "readme"],
-        "Media Files": ["image", "video", "audio", "photo", "media", "picture"],
-        "Archives": ["archive", "backup", "old", "history"]
+        "Work Documents": ["report", "project", "work", "business", "meeting", "email", "client", "office", "presentation", "brief", "strategy", "plan", "proposal"],
+        "Personal Files": ["personal", "goals", "life", "diary", "journal", "health", "hobby", "todo", "family", "private"],
+        "Educational Materials": ["study", "course", "tutorial", "lesson", "basics", "guide", "ml", "machine", "learning", "data", "algorithm", "college", "university", "lecture", "homework", "exam", "assignment", "textbook", "notes", "education"],
+        "Financial Documents": ["invoice", "bill", "budget", "expense", "tax", "receipt", "bank", "statement", "finance", "payment", "salary", "investment", "money"],
+        "Creative Projects": ["design", "art", "music", "video", "photo", "portfolio", "story", "tale", "novel", "writing", "script", "sketch", "creative", "draft"],
+        "Technical Docs": ["code", "programming", "api", "manual", "spec", "config", "cybersecurity", "security", "documentation", "readme", "dev", "tech", "setup", "install", "git", "hub", "log"],
+        "Media Files": ["image", "video", "audio", "photo", "media", "picture", "album", "clip", "stream", "png", "jpg", "mp3", "mp4"],
+        "Archives": ["archive", "backup", "old", "history", "legacy", "collection", "zip", "tar", "rar"],
+        "General Planning": ["schedule", "plan", "time", "calendar", "timetable", "agenda", "tasks", "list", "table", "weekly", "daily", "monthly"]
     }
     
-    # Find the best matching category
+    # Find the best matching category with a weighted score
     best_category = None
     best_score = 0
     for category, keywords in category_mappings.items():
-        score = sum(1 for term in top_terms if term in keywords)
+        # Weight the top terms more heavily (top 1 = 3 pts, top 2 = 2 pts, etc.)
+        score = sum((5 - i) for i, term in enumerate(top_terms) if term in keywords)
         if score > best_score:
             best_score = score
             best_category = category
     
-    if best_category and best_score > 0:
+    # Require a minimum score to use a category label
+    if best_category and best_score >= 3:
         return best_category
     
-    # Fallback to top 3 terms
-    top_terms_short = [feature_names[i] for i in top_indices[:3]]
-    label = " ".join([t.title() for t in top_terms_short])
-    return label
+    # Fallback: Clean and combine top terms for a more descriptive label
+    # Skip very short words (<=2 chars) or common noise words
+    noise_words = {"the", "and", "for", "with", "this", "that"}
+    filtered_terms = [t for t in top_terms[:3] if len(t) > 2 and t not in noise_words]
+    
+    if not filtered_terms:
+        # If no good terms, use the top one anyway
+        return top_terms[0].title()
+        
+    return " & ".join([t.title() for t in filtered_terms])
 
 
 def run_filename_clustering(k=None, db_path=DB_PATH):
@@ -91,14 +95,16 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
     
     # Dynamic cluster count based on file count
     if k is None:
-        if num_files <= 4:
+        if num_files <= 3:
             k = 2
-        elif num_files <= 10:
+        elif num_files <= 5:
             k = 3
-        elif num_files <= 20:
-            k = 4
-        else:
+        elif num_files <= 10:
             k = 5
+        elif num_files <= 20:
+            k = 6
+        else:
+            k = 8
     
     # Ensure k doesn't exceed file count
     k = min(k, num_files)
@@ -134,24 +140,26 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
         label = get_cluster_label(kmeans, i, feature_names)
         cluster_labels[i] = label
 
-    # Update database
+    # Update database - Optimized with executemany
+    update_data = []
     for idx, (fid, _, _) in enumerate(rows):
         cluster_id = int(kmeans.labels_[idx])
         label = cluster_labels[cluster_id]
+        update_data.append((cluster_id, label, fid))
         
-        cur.execute("""
-            UPDATE files
-            SET cluster_id = ?, cluster_label = ?
-            WHERE id = ?
-        """, (cluster_id, label, fid))
+    cur.executemany("""
+        UPDATE files
+        SET cluster_id = ?, cluster_label = ?
+        WHERE id = ?
+    """, update_data)
     
     # Clear clustering for non-docs
     doc_ids = {r[0] for r in rows}
     all_ids = {r[0] for r in all_rows}
-    non_doc_ids = all_ids - doc_ids
+    non_doc_ids = list(all_ids - doc_ids)
     
-    for fid in non_doc_ids:
-        cur.execute("UPDATE files SET cluster_id = NULL, cluster_label = NULL WHERE id = ?", (fid,))
+    if non_doc_ids:
+        cur.executemany("UPDATE files SET cluster_id = NULL, cluster_label = NULL WHERE id = ?", [(fid,) for fid in non_doc_ids])
 
     conn.commit()
     conn.close()

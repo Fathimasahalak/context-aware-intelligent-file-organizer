@@ -75,87 +75,111 @@ class SemanticSearch:
         return self.model
 
     def load_files(self, force_rebuild=False):
-        """Sync database files with the semantic vector cache.
-        
-        Args:
-            force_rebuild (bool): If True, ignores disk cache and re-encodes everything.
-        """
+        """Sync database files with the semantic vector cache efficiently."""
         from database import get_connection
+        
+        # 1. Load DB state (Lightweight)
         conn = get_connection(self.db_path)
         cur = conn.cursor()
         try:
-            # We only index files that have text OR a name
-            cur.execute("""
-                SELECT id, path, searchable_text 
-                FROM files 
-                ORDER BY id ASC
-            """)
-            rows = cur.fetchall()
+            cur.execute("SELECT id, path FROM files ORDER BY id ASC")
+            db_rows = cur.fetchall()
         finally:
             conn.close()
 
-        if not rows:
+        if not db_rows:
             self.file_ids = []
             self.file_paths = []
             self.vectors = np.array([])
+            self.save_cache()
             return
 
-        db_ids = [r[0] for r in rows]
-        db_paths = [r[1] for r in rows]
-        # Use text if available, otherwise use filename
-        db_texts = [r[2] if (r[2] and r[2].strip()) else os.path.basename(r[1]) for r in rows]
+        db_id_map = {row[0]: row[1] for row in db_rows}
+        db_ids = set(db_id_map.keys())
 
-        # 1. Load existing cache from disk
-        id_to_vec = {}
+        # 2. Load Cache
+        cached_ids = []
+        cached_vectors = None
+        
         if not force_rebuild and os.path.exists(ID_CACHE) and os.path.exists(EMBEDDING_CACHE):
             try:
                 cached_ids = np.load(ID_CACHE).tolist()
                 cached_vectors = np.load(EMBEDDING_CACHE)
-                if len(cached_ids) == len(cached_vectors):
-                    for i, fid in enumerate(cached_ids):
-                        id_to_vec[fid] = cached_vectors[i]
+                
+                # Validation
+                if len(cached_ids) != len(cached_vectors):
+                    logging.warning("Cache size mismatch. Rebuilding.")
+                    cached_ids = []
+                    cached_vectors = None
             except Exception as e:
-                logging.warning(f"Cache corrupt, rebuilding: {e}")
+                logging.warning(f"Cache corrupt: {e}")
+                cached_ids = []
 
-        # 2. Build final vector list
-        final_vectors = []
-        texts_to_encode = []
-        indices_to_encode = []
+        # 3. Identify Changes
+        cached_id_set = set(cached_ids)
+        
+        # A. Deletions (In cache but not in DB)
+        ids_to_remove = cached_id_set - db_ids
+        if ids_to_remove:
+            logging.info(f"Removing {len(ids_to_remove)} obsolete files from index...")
+            indices_to_keep = [i for i, fid in enumerate(cached_ids) if fid in db_ids]
+            
+            if cached_vectors is not None:
+                cached_vectors = cached_vectors[indices_to_keep]
+            cached_ids = [cached_ids[i] for i in indices_to_keep]
 
-        for i, fid in enumerate(db_ids):
-            if fid in id_to_vec:
-                final_vectors.append(id_to_vec[fid])
-            else:
-                final_vectors.append(None) # Mark for encoding
-                texts_to_encode.append(db_texts[i])
-                indices_to_encode.append(len(final_vectors) - 1)
-
-        # 3. Encode new content if needed
-        if texts_to_encode:
+        # B. Additions (In DB but not in cache)
+        ids_to_add = list(db_ids - set(cached_ids))
+        if ids_to_add:
+            logging.info(f"Indexing {len(ids_to_add)} new files...")
+            
+            # Batch fetch text for new files only
+            conn = get_connection(self.db_path)
+            cur = conn.cursor()
+            
+            # Split into chunks to avoid too many SQL variables
+            chunk_size = 900
+            new_vectors_list = []
+            
             model = self.get_model()
-            if model:
-                logging.info(f"AI is learning {len(texts_to_encode)} new files...")
-                new_vecs = model.encode(texts_to_encode, show_progress_bar=True)
-                for i, vec in enumerate(new_vecs):
-                    final_vectors[indices_to_encode[i]] = vec
-            else:
-                # Cleanup if model fails: remove files that couldn't be encoded
-                valid_indices = [i for i, v in enumerate(final_vectors) if v is not None]
-                db_ids = [db_ids[i] for i in valid_indices]
-                db_paths = [db_paths[i] for i in valid_indices]
-                final_vectors = [v for v in final_vectors if v is not None]
+            if not model:
+                logging.error("Model unavailable. Skipping indexing.")
+                return
 
-        # 4. Final state update
-        if final_vectors:
-            self.vectors = np.array(final_vectors)
-            self.file_ids = db_ids
-            self.file_paths = db_paths
-            self.save_cache()
-            logging.info(f"Search index ready with {len(self.file_ids)} files.")
-        else:
-            self.vectors = np.array([])
-            self.file_ids = []
-            self.file_paths = []
+            for i in range(0, len(ids_to_add), chunk_size):
+                chunk_ids = ids_to_add[i:i + chunk_size]
+                placeholders = ',' .join('?' * len(chunk_ids))
+                cur.execute(f"SELECT id, path, searchable_text FROM files WHERE id IN ({placeholders})", chunk_ids)
+                new_rows = cur.fetchall()
+                
+                texts_to_encode = []
+                for _, path, text in new_rows:
+                    content = text if (text and text.strip()) else os.path.basename(path)
+                    texts_to_encode.append(content)
+                
+                if texts_to_encode:
+                    vectors = model.encode(texts_to_encode, show_progress_bar=True)
+                    new_vectors_list.append(vectors)
+            
+            conn.close()
+            
+            if new_vectors_list:
+                new_vectors = np.concatenate(new_vectors_list, axis=0)
+                if cached_vectors is None or len(cached_vectors) == 0:
+                    cached_vectors = new_vectors
+                else:
+                    cached_vectors = np.concatenate([cached_vectors, new_vectors], axis=0)
+                
+                cached_ids.extend(ids_to_add)
+
+        # 4. Update Memory & Cache
+        self.file_ids = cached_ids
+        # Reconstruct paths list in correct order corresponding to IDs
+        self.file_paths = [db_id_map[fid] for fid in self.file_ids]
+        self.vectors = cached_vectors if cached_vectors is not None else np.array([])
+        
+        self.save_cache()
+        logging.info(f"Search index synced. Total: {len(self.file_ids)}")
 
 
     def save_cache(self):

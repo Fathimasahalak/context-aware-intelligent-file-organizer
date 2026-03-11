@@ -62,6 +62,6 @@ python tests/test_integration.py
 - **Database:** All persistent data is stored in `data/file_logs.db`. Ensure the `data/` directory exists.
 - **ML Models:** The `SentenceTransformer` model is a singleton managed in `ml/semantic_search.py` to optimize memory usage.
 - **Caching:** Semantic embeddings and IDs are cached in `data/file_embeddings.npy` and `data/file_ids.npy` to speed up search initialization.
-- **UI Styling:** Follows Material Design 3 principles. UI constants (colors, fonts, radii) are defined in `app.py`.
+- **UI Styling:** Follows Material Design 3 principles. UI constants (colors, fonts, radii) are defined in `theme.py`.
 - **Text Extraction:** PDF extraction is limited to the first few pages (defined in `config.py`) to maintain performance.
 - **Logging:** Use the standard `logging` module. Logs are written to `file_organizer.log` by default.

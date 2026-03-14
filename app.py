@@ -493,6 +493,7 @@ class ModernFileManager(ctk.CTk):
             ("📄 Open File", lambda: self.open_existing_file(file_path)),
             ("📁 Open Folder", lambda: self.open_containing_folder(file_path)),
             ("───", None),
+            ("🏷️ Move to Category", lambda: self.move_to_category_dialog(file_path)),
             ("🔄 Refresh This File", lambda: self.reindex_single_file(file_path)),
             ("📋 Copy Path", lambda: self.copy_file_path(file_path)),
             ("───", None),
@@ -515,6 +516,107 @@ class ModernFileManager(ctk.CTk):
         menu.bind("<FocusOut>", lambda e: menu.destroy())
         menu.focus_set()
         menu.grab_set()
+
+    def rename_cluster_dialog(self, old_label):
+        """Show dialog to rename a cluster"""
+        dialog = ctk.CTkInputDialog(text=f"Rename category '{old_label}' to:", title="Rename Category")
+        new_label = dialog.get_input()
+        if new_label and new_label != old_label:
+            self.rename_cluster(old_label, new_label)
+
+    def rename_cluster(self, old_label, new_label):
+        """Rename a cluster and learn from it"""
+        try:
+            conn = get_connection(DB_PATH)
+            cur = conn.cursor()
+            
+            # 1. Update all files with this label
+            cur.execute("""
+                UPDATE files 
+                SET cluster_label = ?, is_manual_label = 1 
+                WHERE cluster_label = ?
+            """, (new_label, old_label))
+            
+            # 2. Add to user_categories for learning
+            cur.execute("INSERT OR IGNORE INTO user_categories (name) VALUES (?)", (new_label,))
+            
+            # 3. Trigger fingerprint update in background
+            from ml.filename_cluster import update_category_fingerprint
+            threading.Thread(target=update_category_fingerprint, args=(new_label,), daemon=True).start()
+            
+            conn.commit()
+            conn.close()
+            
+            self.status_label.configure(text=f"Renamed '{old_label}' to '{new_label}'")
+            self.switch_view("clusters") # Refresh view
+        except Exception as e:
+            logging.error(f"Failed to rename cluster: {e}")
+            messagebox.showerror("Error", f"Failed to rename: {e}")
+
+    def move_to_category_dialog(self, file_path):
+        """Show dialog to move a file to a different category"""
+        # Get existing categories
+        conn = get_connection(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT cluster_label FROM files WHERE cluster_label IS NOT NULL")
+        existing_categories = [row[0] for row in cur.fetchall()]
+        cur.execute("SELECT name FROM user_categories")
+        user_cats = [row[0] for row in cur.fetchall()]
+        conn.close()
+        
+        all_categories = sorted(list(set(existing_categories + user_cats)))
+        
+        # Simple input dialog for now (can be improved to a dropdown)
+        dialog = ctk.CTkInputDialog(text="Enter category name:", title="Move to Category")
+        category_name = dialog.get_input()
+        
+        if category_name:
+            self.move_file_to_category(file_path, category_name)
+
+    def move_file_to_category(self, file_path, category_name):
+        """Move a file to a category and learn from it"""
+        try:
+            conn = get_connection(DB_PATH)
+            cur = conn.cursor()
+            
+            # 1. Get file ID
+            cur.execute("SELECT id FROM files WHERE path = ?", (file_path,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return
+            file_id = row[0]
+            
+            # 2. Update file
+            cur.execute("""
+                UPDATE files 
+                SET cluster_label = ?, is_manual_label = 1 
+                WHERE id = ?
+            """, (category_name, file_id))
+            
+            # 3. Log history
+            from datetime import datetime
+            cur.execute("""
+                INSERT INTO category_history (file_id, category_name, timestamp)
+                VALUES (?, ?, ?)
+            """, (file_id, category_name, datetime.now().isoformat()))
+            
+            # 4. Ensure category exists in user_categories
+            cur.execute("INSERT OR IGNORE INTO user_categories (name) VALUES (?)", (category_name,))
+            
+            # 5. Trigger fingerprint update
+            from ml.filename_cluster import update_category_fingerprint
+            threading.Thread(target=update_category_fingerprint, args=(category_name,), daemon=True).start()
+            
+            conn.commit()
+            conn.close()
+            
+            self.status_label.configure(text=f"Moved to '{category_name}'")
+            if self.current_view == "clusters":
+                self.switch_view("clusters")
+        except Exception as e:
+            logging.error(f"Failed to move file: {e}")
+            messagebox.showerror("Error", f"Failed to move: {e}")
 
     def copy_file_path(self, file_path):
         """Copy file path to clipboard"""

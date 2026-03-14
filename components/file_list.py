@@ -192,6 +192,19 @@ class FileList(ctk.CTkFrame):
             anchor="w"
         )
         label.pack(side="left", padx=15, pady=10)
+
+        # Rename button
+        rename_btn = ctk.CTkButton(
+            header,
+            text="✏️",
+            command=lambda l=cluster_label: self.app.rename_cluster_dialog(l),
+            width=30,
+            height=30,
+            fg_color="transparent",
+            hover_color=SURFACE_CONTAINER_HIGH,
+            font=BODY_FONT
+        )
+        rename_btn.pack(side="left", padx=5, pady=5)
         
         count_label = ctk.CTkLabel(
             header,

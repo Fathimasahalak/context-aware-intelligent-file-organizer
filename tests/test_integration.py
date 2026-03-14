@@ -36,13 +36,14 @@ def test_end_to_end():
         cur.execute("""
             CREATE TABLE files (
                 id INTEGER PRIMARY KEY,
-                path TEXT,
+                path TEXT UNIQUE,
                 searchable_text TEXT,
                 access_count INTEGER DEFAULT 0,
                 total_time INTEGER DEFAULT 0,
                 last_opened TEXT,
                 cluster_id INTEGER,
-                cluster_label TEXT
+                cluster_label TEXT,
+                is_manual_label INTEGER DEFAULT 0
             )
         """)
         cur.execute("""
@@ -52,6 +53,13 @@ def test_end_to_end():
                 open_time TEXT,
                 close_time TEXT,
                 duration INTEGER
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE user_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                keywords TEXT
             )
         """)
         conn.commit()

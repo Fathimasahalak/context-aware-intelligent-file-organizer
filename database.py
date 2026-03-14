@@ -28,6 +28,7 @@ def init_db(db_path=None):
         last_opened TEXT,
         cluster_id INTEGER,
         cluster_label TEXT,
+        is_manual_label INTEGER DEFAULT 0,
         searchable_text TEXT
     )
     """)
@@ -41,6 +42,25 @@ def init_db(db_path=None):
         duration INTEGER
     )
     """)
+
+    # New tables for User-as-Teacher system
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
+        keywords TEXT -- JSON string: {word: weight}
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS category_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER,
+        category_name TEXT,
+        timestamp TEXT,
+        FOREIGN KEY(file_id) REFERENCES files(id)
+    )
+    """)
     
     # Schema Migration / Verification
     # Check for columns that might be missing in older DB versions
@@ -50,6 +70,7 @@ def init_db(db_path=None):
     required_columns = {
         "cluster_id": "INTEGER",
         "cluster_label": "TEXT",
+        "is_manual_label": "INTEGER DEFAULT 0",
         "searchable_text": "TEXT"
     }
     

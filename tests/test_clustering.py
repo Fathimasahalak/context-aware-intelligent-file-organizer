@@ -13,17 +13,29 @@ class TestClustering(unittest.TestCase):
     def setUp(self):
         # Create a temporary database
         self.test_db = "test_files.db"
+        if os.path.exists(self.test_db):
+            try: os.remove(self.test_db)
+            except: pass
+            
         self.conn = sqlite3.connect(self.test_db)
         self.cur = self.conn.cursor()
         
-        # Create table
+        # Create table with all required columns
         self.cur.execute("""
             CREATE TABLE files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT,
                 searchable_text TEXT,
                 cluster_id INTEGER,
-                cluster_label TEXT
+                cluster_label TEXT,
+                is_manual_label INTEGER DEFAULT 0
+            )
+        """)
+        self.cur.execute("""
+            CREATE TABLE user_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                keywords TEXT
             )
         """)
         

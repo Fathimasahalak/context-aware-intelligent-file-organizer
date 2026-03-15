@@ -10,12 +10,12 @@ import sqlite3
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import init_db
-from logger import start_file_session, end_file_session
+from core.database import init_db
+from core.logger import start_file_session, end_file_session
 from ml.filename_cluster import run_filename_clustering
 from ml.semantic_search import SemanticSearch
 from ml.recommendation import get_smart_priority_files
-from text_extractor import get_searchable_text
+from core.text_extractor import get_searchable_text
 
 def test_end_to_end():
     """Test complete workflow: add files → cluster → search → delete → verify"""

@@ -1,7 +1,7 @@
 import customtkinter as ctk
 import os
 from theme import *
-from database import get_connection
+from core.database import get_connection
 from config import DB_PATH
 from datetime import datetime
 

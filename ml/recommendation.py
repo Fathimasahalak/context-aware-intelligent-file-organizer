@@ -6,7 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from config import DB_PATH
 from ml.semantic_search import get_semantic_searcher
-from database import get_connection
+from core.database import get_connection
 
 # Weights for the hybrid score
 W_RECENCY = 0.4

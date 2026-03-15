@@ -8,8 +8,8 @@ from datetime import datetime
 import logging
 
 # Local imports
-from database import init_db, get_connection
-from logger import start_file_session, end_file_session, remove_file_session
+from core.database import init_db, get_connection
+from core.logger import start_file_session, end_file_session, remove_file_session
 from ml.filename_cluster import run_filename_clustering
 from ml.recommendation import get_smart_priority_files
 from config import DB_PATH
@@ -53,6 +53,7 @@ class ModernFileManager(ctk.CTk):
         self.semantic_searcher = None
         self.needs_cluster_refresh = False
         self.active_context_menu = None
+        self.view_request_id = 0
 
         # UI Components placeholders
         self.sidebar = None
@@ -88,7 +89,7 @@ class ModernFileManager(ctk.CTk):
 
     def _check_tesseract(self):
         """Check if Tesseract is available and log status"""
-        from text_extractor import is_tesseract_available
+        from core.text_extractor import is_tesseract_available
         if not is_tesseract_available():
             logging.info("Tesseract OCR not found. Image text extraction is disabled.")
 
@@ -158,32 +159,40 @@ class ModernFileManager(ctk.CTk):
 
     def load_view(self, view_name):
         """Load data for the selected view"""
-        logging.info(f"Loading view {view_name}")
+        self.view_request_id += 1
+        request_id = self.view_request_id
+        
+        logging.info(f"Loading view {view_name} (req: {request_id})")
         self.file_list.clear()
+        self.selected_files.clear() # Clear selection when switching views
         
         if view_name == "smart":
-            self.load_smart_priority()
+            self.load_smart_priority(request_id)
         elif view_name == "clusters":
-            self.load_clusters()
+            self.load_clusters(request_id)
         elif view_name == "all":
-            self.load_all_files()
+            self.load_all_files(request_id)
 
-    def load_smart_priority(self):
+    def load_smart_priority(self, request_id):
         """Load smart priority files"""
         self.file_list.show_loading_state("Loading smart priority...")
-        threading.Thread(target=self._load_smart_priority_async, daemon=True).start()
+        threading.Thread(target=self._load_smart_priority_async, args=(request_id,), daemon=True).start()
     
-    def _load_smart_priority_async(self):
+    def _load_smart_priority_async(self, request_id):
         """Load smart priority in background"""
         try:
             files = get_smart_priority_files(limit=50)
-            self.after(0, self._display_smart_priority, files)
+            self.after(0, self._display_smart_priority, files, request_id)
         except Exception as e:
             logging.error(f"Error loading smart priority: {e}")
-            self.after(0, lambda: self.file_list.show_empty_state("Unable to load smart priority files."))
+            if self.view_request_id == request_id:
+                self.after(0, lambda: self.file_list.show_empty_state("Unable to load smart priority files."))
     
-    def _display_smart_priority(self, files):
+    def _display_smart_priority(self, files, request_id):
         """Display smart priority files on main thread"""
+        if self.view_request_id != request_id:
+            return
+            
         self.file_list.clear()
         
         if not files:
@@ -200,15 +209,15 @@ class ModernFileManager(ctk.CTk):
         self.file_count_label.configure(text=f"{len(added_paths)} files")
         self.status_label.configure(text="Smart priority loaded")
 
-    def load_clusters(self):
+    def load_clusters(self, request_id):
         """Load clustered files with smart auto-refresh"""
         if self.needs_cluster_refresh:
             self._refresh_clusters()
         else:
             self.file_list.show_loading_state("Loading categories...")
-            threading.Thread(target=self._load_clusters_async, daemon=True).start()
+            threading.Thread(target=self._load_clusters_async, args=(request_id,), daemon=True).start()
     
-    def _load_clusters_async(self):
+    def _load_clusters_async(self, request_id):
         """Load clusters in background"""
         try:
             conn = get_connection(DB_PATH)
@@ -222,13 +231,17 @@ class ModernFileManager(ctk.CTk):
             """)
             clusters = cur.fetchall()
             conn.close()
-            self.after(0, self._display_clusters, clusters)
+            self.after(0, self._display_clusters, clusters, request_id)
         except Exception as e:
             logging.error(f"Error loading clusters: {e}")
-            self.after(0, lambda: self.file_list.show_empty_state("Unable to load file categories."))
+            if self.view_request_id == request_id:
+                self.after(0, lambda: self.file_list.show_empty_state("Unable to load file categories."))
     
-    def _display_clusters(self, clusters):
+    def _display_clusters(self, clusters, request_id):
         """Display clusters on main thread"""
+        if self.view_request_id != request_id:
+            return
+            
         self.file_list.clear()
         
         if not clusters:
@@ -243,12 +256,12 @@ class ModernFileManager(ctk.CTk):
         self.file_count_label.configure(text=f"{total_files} files in {len(clusters)} categories")
         self.status_label.configure(text="Categories loaded")
 
-    def load_all_files(self):
+    def load_all_files(self, request_id):
         """Load all files"""
         self.file_list.show_loading_state("Loading all files...")
-        threading.Thread(target=self._load_all_files_async, daemon=True).start()
+        threading.Thread(target=self._load_all_files_async, args=(request_id,), daemon=True).start()
     
-    def _load_all_files_async(self):
+    def _load_all_files_async(self, request_id):
         """Load all files in background"""
         try:
             conn = get_connection(DB_PATH)
@@ -260,13 +273,17 @@ class ModernFileManager(ctk.CTk):
             """)
             rows = cur.fetchall()
             conn.close()
-            self.after(0, self._display_all_files, rows)
+            self.after(0, self._display_all_files, rows, request_id)
         except Exception as e:
             logging.error(f"Error loading files: {e}")
-            self.after(0, lambda: self.file_list.show_empty_state("Unable to load all files."))
+            if self.view_request_id == request_id:
+                self.after(0, lambda: self.file_list.show_empty_state("Unable to load all files."))
     
-    def _display_all_files(self, rows):
+    def _display_all_files(self, rows, request_id):
         """Display all files on main thread"""
+        if self.view_request_id != request_id:
+            return
+            
         self.file_list.clear()
         
         if not rows:
@@ -298,11 +315,14 @@ class ModernFileManager(ctk.CTk):
             query = query[:500]
             messagebox.showinfo("Info", "Search query was truncated to 500 characters.")
         
+        self.view_request_id += 1
+        request_id = self.view_request_id
+        
         self.file_list.clear()
         self.status_label.configure(text="Searching...")
-        threading.Thread(target=self._do_search, args=(query,), daemon=True).start()
+        threading.Thread(target=self._do_search, args=(query, request_id), daemon=True).start()
 
-    def _do_search(self, query):
+    def _do_search(self, query, request_id):
         """Perform search in background with strict relevance filtering"""
         try:
             searcher = self._ensure_semantic_searcher()
@@ -367,14 +387,18 @@ class ModernFileManager(ctk.CTk):
             
             results = list(all_results_dict.values())
             results.sort(key=lambda x: x['score'], reverse=True)
-            self.after(0, self._update_search_results, results[:20])
+            self.after(0, self._update_search_results, results[:20], request_id)
             
         except Exception as e:
             logging.error(f"Search error: {e}")
-            self.after(0, lambda: self.status_label.configure(text="Search failed."))
+            if self.view_request_id == request_id:
+                self.after(0, lambda: self.status_label.configure(text="Search failed."))
 
-    def _update_search_results(self, results):
+    def _update_search_results(self, results, request_id):
         """Update search results on main thread"""
+        if self.view_request_id != request_id:
+            return
+            
         self.file_list.clear()
         
         if not results:
@@ -423,7 +447,7 @@ class ModernFileManager(ctk.CTk):
     def _add_file_async(self, file_path):
         """Add file processing in background"""
         try:
-            from text_extractor import get_searchable_text
+            from core.text_extractor import get_searchable_text
             searchable_text = get_searchable_text(file_path)
             
             conn = get_connection(DB_PATH)
@@ -661,6 +685,7 @@ class ModernFileManager(ctk.CTk):
             if not messagebox.askyesno("Confirm Remove", f"Remove this file from the app?\n\n{os.path.basename(file_path)}"):
                 return
             
+            file_path = normalize_path(file_path)
             conn = get_connection(DB_PATH)
             cur = conn.cursor()
             cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
@@ -673,40 +698,63 @@ class ModernFileManager(ctk.CTk):
                 if self.semantic_searcher:
                     self.semantic_searcher.remove_file(file_path)
                 remove_file_session(file_path)
+                
+                # Fix selection ghosting
+                if file_path in self.selected_files:
+                    self.selected_files.remove(file_path)
+                
                 self.load_view(self.current_view)
                 self.status_label.configure(text=f"Removed: {os.path.basename(file_path)}")
         except Exception as e:
+            logging.error(f"Failed to remove file: {e}")
             messagebox.showerror("Error", f"Failed to remove file: {e}")
 
     def delete_selected_files(self):
-        """Delete all selected files (batch operation)"""
+        """Delete all selected files (efficient batch operation)"""
         if not self.selected_files:
             return
         
-        if not messagebox.askyesno("Confirm Batch Remove", f"Remove {len(self.selected_files)} files from the app?"):
+        selected_list = list(self.selected_files)
+        if not messagebox.askyesno("Confirm Batch Remove", f"Remove {len(selected_list)} files from the app?"):
             return
         
-        deleted_count = 0
-        for file_path in list(self.selected_files):
+        self.status_label.configure(text=f"Removing {len(selected_list)} files...")
+        
+        def task():
             try:
                 conn = get_connection(DB_PATH)
                 cur = conn.cursor()
-                cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
-                if cur.rowcount > 0:
-                    deleted_count += 1
-                    if self.semantic_searcher:
-                        self.semantic_searcher.remove_file(file_path)
-                    remove_file_session(file_path)
+                deleted_count = 0
+                
+                # Use a single transaction for all deletions
+                for file_path in selected_list:
+                    cur.execute("DELETE FROM files WHERE lower(path) = lower(?)", (file_path,))
+                    if cur.rowcount > 0:
+                        deleted_count += 1
+                        if self.semantic_searcher:
+                            self.semantic_searcher.remove_file(file_path)
+                        remove_file_session(file_path)
+                
                 conn.commit()
                 conn.close()
+                
+                # Cleanup state on main thread
+                self.after(0, self._on_batch_delete_complete, deleted_count)
             except Exception as e:
-                logging.error(f"Failed to delete {file_path}: {e}")
-        
-        if deleted_count > 0:
+                logging.error(f"Batch delete failed: {e}")
+                self.after(0, lambda: messagebox.showerror("Error", f"Batch delete failed: {e}"))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _on_batch_delete_complete(self, count):
+        """Callback after batch deletion finishes"""
+        if count > 0:
             self.needs_cluster_refresh = True
             self.selected_files.clear()
             self.load_view(self.current_view)
-            self.status_label.configure(text=f"Removed {deleted_count} files")
+            self.status_label.configure(text=f"Removed {count} files")
+        else:
+            self.status_label.configure(text="No files were removed")
 
     def _refresh_clusters(self):
         """Refresh file clusters"""
@@ -747,6 +795,7 @@ class ModernFileManager(ctk.CTk):
 
     def _smart_background_sync(self):
         """Quietly repair the search index for files that were added with old logic"""
+        conn = None
         try:
             time.sleep(5) # Let app start first
             conn = get_connection(DB_PATH)
@@ -774,9 +823,11 @@ class ModernFileManager(ctk.CTk):
                 self.needs_cluster_refresh = True
                 if self.semantic_searcher:
                     self.semantic_searcher.load_files()
-            conn.close()
         except Exception as e:
             logging.error(f"Smart sync failed: {e}")
+        finally:
+            if conn:
+                conn.close()
 
     def _ensure_clustering(self):
         """Run clustering on startup if needed"""

@@ -1,0 +1,13 @@
+# Ignore large non-source directories to keep context lean
+.venv/
+venv/
+__pycache__/
+.git/
+.github/
+.pytest_cache/
+data/
+logs/
+screenshots/
+*.db
+*.npy
+*.pyc

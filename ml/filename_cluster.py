@@ -6,8 +6,8 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 
-from config import DB_PATH, DOCUMENT_EXTENSIONS, CLUSTERING_CLUSTERS
-from database import get_connection
+from config import DB_PATH, DOCUMENT_EXTENSIONS, CLUSTERING_CLUSTERS, DEFAULT_CATEGORIES
+from core.database import get_connection
 
 
 def clean_filename(path):
@@ -24,8 +24,8 @@ def update_category_fingerprint(category_name):
     Update the keyword fingerprint for a category based on the files in it.
     This is called when a user renames a cluster or moves a file.
     """
+    conn = get_connection(DB_PATH)
     try:
-        conn = get_connection(DB_PATH)
         cur = conn.cursor()
         
         # Get all files currently in this category
@@ -33,7 +33,6 @@ def update_category_fingerprint(category_name):
         rows = cur.fetchall()
         
         if not rows:
-            conn.close()
             return
 
         corpus = []
@@ -60,10 +59,11 @@ def update_category_fingerprint(category_name):
         """, (category_name, json.dumps(fingerprint)))
         
         conn.commit()
-        conn.close()
         logging.info(f"Updated fingerprint for category: {category_name}")
     except Exception as e:
         logging.error(f"Failed to update fingerprint for {category_name}: {e}")
+    finally:
+        conn.close()
 
 
 def get_cluster_label(model, cluster_id, feature_names):
@@ -104,22 +104,10 @@ def get_cluster_label(model, cluster_id, feature_names):
     if best_user_cat and max_user_score > 0.2: # Lowered threshold for better detection
         return best_user_cat
 
-    # 2. Check against Hardcoded Mappings
-    category_mappings = {
-        "Work Documents": ["report", "project", "work", "business", "meeting", "email", "client", "office", "presentation", "brief", "strategy", "plan", "proposal"],
-        "Personal Files": ["personal", "goals", "life", "diary", "journal", "health", "hobby", "todo", "family", "private"],
-        "Educational Materials": ["study", "course", "tutorial", "lesson", "basics", "guide", "ml", "machine", "learning", "data", "algorithm", "college", "university", "lecture", "homework", "exam", "assignment", "textbook", "notes", "education"],
-        "Financial Documents": ["invoice", "bill", "budget", "expense", "tax", "receipt", "bank", "statement", "finance", "payment", "salary", "investment", "money"],
-        "Creative Projects": ["design", "art", "music", "video", "photo", "portfolio", "story", "tale", "novel", "writing", "script", "sketch", "creative", "draft"],
-        "Technical Docs": ["code", "programming", "api", "manual", "spec", "config", "cybersecurity", "security", "documentation", "readme", "dev", "tech", "setup", "install", "git", "hub", "log"],
-        "Media Files": ["image", "video", "audio", "photo", "media", "picture", "album", "clip", "stream", "png", "jpg", "mp3", "mp4"],
-        "Archives": ["archive", "backup", "old", "history", "legacy", "collection", "zip", "tar", "rar"],
-        "General Planning": ["schedule", "plan", "time", "calendar", "timetable", "agenda", "tasks", "list", "table", "weekly", "daily", "monthly"]
-    }
-    
+    # 2. Check against Default Mappings (from config/JSON)
     best_category = None
     best_score = 0
-    for category, keywords in category_mappings.items():
+    for category, keywords in DEFAULT_CATEGORIES.items():
         score = sum((5 - i) for i, term in enumerate(top_terms[:5]) if term in keywords)
         if score > best_score:
             best_score = score

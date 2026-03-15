@@ -1,7 +1,7 @@
 import time
 import os
 from datetime import datetime
-from database import get_connection
+from core.database import get_connection
 
 open_sessions = {}
 

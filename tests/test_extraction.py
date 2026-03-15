@@ -6,7 +6,7 @@ import os
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from text_extractor import extract_text_from_pdf, clean_filename_text, get_searchable_text
+from core.text_extractor import extract_text_from_pdf, clean_filename_text, get_searchable_text
 from config import MAX_PDF_PAGES
 
 class TestTextExtractor(unittest.TestCase):

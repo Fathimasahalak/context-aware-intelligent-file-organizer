@@ -76,7 +76,7 @@ class SemanticSearch:
 
     def load_files(self, force_rebuild=False):
         """Sync database files with the semantic vector cache efficiently."""
-        from database import get_connection
+        from core.database import get_connection
         
         # 1. Load DB state (Lightweight)
         conn = get_connection(self.db_path)

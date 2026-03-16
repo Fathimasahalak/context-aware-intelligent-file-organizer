@@ -742,8 +742,7 @@ class ModernFileManager(ctk.CTk):
     def process_file_session(self, file_path):
         """Handle logging session in background and perform smart repair if needed"""
         try:
-            # 1. Log the session
-            from logger import start_file_session, end_file_session
+            # 1. Log the session (using top-level imports)
             start_file_session(file_path)
             
             # 2. Smart Repair check: if file is a doc but has no content indexed, fix it now
@@ -756,7 +755,7 @@ class ModernFileManager(ctk.CTk):
                 # If text is very short (just filename), it might be from an old version
                 if row and (not row[0] or len(row[0]) < 50):
                     logging.info(f"Smart Repair: On-access indexing for {os.path.basename(file_path)}")
-                    from text_extractor import get_searchable_text
+                    from core.text_extractor import get_searchable_text
                     text = get_searchable_text(file_path)
                     cur.execute("UPDATE files SET searchable_text = ? WHERE path = ?", (text, file_path))
                     conn.commit()
@@ -765,7 +764,7 @@ class ModernFileManager(ctk.CTk):
                         self.semantic_searcher.load_files()
                 conn.close()
 
-            time.sleep(10)
+            time.sleep(1) # Record at least 1s of duration
             end_file_session(file_path)
         except Exception as e:
             logging.error(f"Session error: {e}")

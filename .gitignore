@@ -36,6 +36,6 @@ Thumbs.db
 # Screenshots
 screenshots/
 
-# Temporary test databases
+# Temporary test databases (ignore all .db in root, but allow in data/ for structure)
 *.db
-!data/*.db
+!data/

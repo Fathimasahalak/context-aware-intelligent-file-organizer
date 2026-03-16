@@ -9,9 +9,9 @@ from ml.semantic_search import get_semantic_searcher
 from core.database import get_connection
 
 # Weights for the hybrid score
-W_RECENCY = 0.4
-W_FREQ = 0.3
-W_CONTEXT = 0.3
+W_RECENCY = 0.3
+W_FREQ = 0.5
+W_CONTEXT = 0.2
 
 
 def get_smart_priority_files(limit=20):

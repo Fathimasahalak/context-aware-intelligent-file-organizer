@@ -172,7 +172,7 @@ class FileList(ctk.CTkFrame):
             text_color=TEXT_PRIMARY,
             anchor="w"
         )
-        name_label.place(relx=0, rely=0.5, anchor="w", relwidth=0.5)
+        name_label.place(relx=0, x=10, rely=0.5, anchor="w", relwidth=0.45)
         
         # Type
         file_type = ext[1:].upper() if ext else "FILE"
@@ -183,7 +183,7 @@ class FileList(ctk.CTkFrame):
             text_color=TEXT_SECONDARY,
             anchor="w"
         )
-        type_label.place(relx=0.5, rely=0.5, anchor="w", relwidth=0.1)
+        type_label.place(relx=0.45, x=10, rely=0.5, anchor="w", relwidth=0.1)
         
         # Last Opened
         time_text = self.format_time(last_opened) if last_opened else "Recently"
@@ -194,36 +194,40 @@ class FileList(ctk.CTkFrame):
             text_color=TEXT_SECONDARY,
             anchor="w"
         )
-        time_label.place(relx=0.6, rely=0.5, anchor="w", relwidth=0.2)
+        time_label.place(relx=0.55, x=10, rely=0.5, anchor="w", relwidth=0.2)
         
+        # Actions Container (relx=0.75)
+        actions_frame = ctk.CTkFrame(row, fg_color="transparent")
+        actions_frame.place(relx=0.75, rely=0.5, anchor="w", relwidth=0.25)
+
         # Move to category button (only in clusters view)
         if self.app.current_view == "clusters":
             move_btn = ctk.CTkButton(
-                row, text="🏷️",
+                actions_frame, text="🏷️",
                 command=lambda p=path: self.app.move_to_category_dialog(p),
-                width=35, height=35, fg_color="transparent",
+                width=30, height=30, fg_color="transparent",
                 hover_color=PRIMARY, text_color=PRIMARY,
-                font=("Segoe UI", 14)
+                font=("Segoe UI", 12)
             )
-            move_btn.place(relx=0.81, rely=0.5, anchor="w")
+            move_btn.pack(side="left", padx=2)
 
         # Open folder button
         folder_btn = ctk.CTkButton(
-            row, text="📁",
+            actions_frame, text="📁",
             command=lambda: self.app.open_containing_folder(path),
             width=30, height=30, fg_color="transparent",
             hover_color=SURFACE_CONTAINER_HIGH, font=BODY_FONT
         )
-        folder_btn.place(relx=0.87, rely=0.5, anchor="w")
+        folder_btn.pack(side="left", padx=2)
         
         # Delete button
         delete_btn = ctk.CTkButton(
-            row, text="🗑️",
+            actions_frame, text="🗑️",
             command=lambda: self.app.delete_file(path),
             width=30, height=30, fg_color="transparent",
             hover_color=ERROR, font=BODY_FONT
         )
-        delete_btn.place(relx=0.93, rely=0.5, anchor="w")
+        delete_btn.pack(side="left", padx=2)
 
         # --- EVENT BINDINGS ---
         interactive_widgets = [row, name_label, type_label, time_label]

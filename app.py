@@ -1,6 +1,7 @@
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
+import sys
 import threading
 import time
 import sqlite3
@@ -54,6 +55,8 @@ class ModernFileManager(ctk.CTk):
         self.needs_cluster_refresh = False
         self.active_context_menu = None
         self.view_request_id = 0
+        self.drag_data = {"path": None, "ghost": None}
+        self._search_timer = None # For debouncing
 
         # UI Components placeholders
         self.sidebar = None
@@ -78,8 +81,23 @@ class ModernFileManager(ctk.CTk):
         # Run clustering if needed
         self._ensure_clustering()
         
+        # Handle clean exit
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         # Start smart background indexing
         threading.Thread(target=self._smart_background_sync, daemon=True).start()
+
+    def on_closing(self):
+        """Ensure the application and all threads exit cleanly"""
+        logging.info("Closing application...")
+        try:
+            self.withdraw()
+            self.quit()
+            self.destroy()
+        except:
+            pass
+        finally:
+            os._exit(0)
 
     def _setup_shortcuts(self):
         """Setup application-wide keyboard shortcuts"""
@@ -323,11 +341,35 @@ class ModernFileManager(ctk.CTk):
         threading.Thread(target=self._do_search, args=(query, request_id), daemon=True).start()
 
     def _do_search(self, query, request_id):
-        """Perform search in background with strict relevance filtering"""
+        """Perform search in background with query expansion and improved AI thresholds"""
         try:
             searcher = self._ensure_semantic_searcher()
             query_lower = query.lower()
             
+            # --- 1. Query Expansion (Improve recall for specific domains) ---
+            expanded_queries = [query]
+            synonym_map = {
+                "cv": ["resume", "portfolio", "biodata", "curriculum vitae", "profile"],
+                "resume": ["cv", "biodata", "curriculum vitae", "work history"],
+                "biodata": ["cv", "resume", "personal info", "profile"],
+                "portfolio": ["projects", "samples", "work", "gallery", "cv"],
+                "image": ["photo", "picture", "screenshot", "img", "gallery"],
+                "money": ["budget", "salary", "expense", "financial", "report"],
+                "schedule": ["timetable", "plan", "calendar", "agenda"],
+                "school": ["university", "college", "course", "exam", "notes"],
+                "work": ["office", "job", "business", "company", "project"]
+            }
+            
+            # Check if query is or contains any of our expansion keywords
+            for word, synonyms in synonym_map.items():
+                if word == query_lower or (f" {word} " in f" {query_lower} "):
+                    expanded_queries.extend(synonyms)
+                    break
+            
+            # Limit number of queries to keep it fast
+            expanded_queries = list(set(expanded_queries))[:5]
+            
+            # --- 2. Keyword Search (Original query only for exact match) ---
             conn = get_connection(DB_PATH)
             cur = conn.cursor()
             cur.execute("""
@@ -338,7 +380,6 @@ class ModernFileManager(ctk.CTk):
             keyword_rows = cur.fetchall()
             conn.close()
             
-            semantic_results = searcher.search(query, top_k=15)
             all_results_dict = {}
             import re
             
@@ -348,46 +389,42 @@ class ModernFileManager(ctk.CTk):
                 basename = os.path.basename(path).lower()
                 ext = os.path.splitext(basename)[1].lower()
                 
-                if len(query_lower) <= 3:
-                    found_as_word = False
-                    # Treat underscores and word boundaries as separators
-                    pattern = r'(?:\b|_)' + re.escape(query_lower) + r'(?:\b|_)'
-                    if re.search(pattern, basename):
-                        found_as_word = True
-                    elif body_text and re.search(pattern, body_text.lower()):
-                        found_as_word = True
-                    if not found_as_word:
-                        continue
-
                 score = 0.4
                 if query_lower in basename:
                     score = 0.8
                     if query_lower == basename or query_lower == os.path.splitext(basename)[0]:
                         score = 1.0
-                    pattern = r'(?:\b|_)' + re.escape(query_lower) + r'(?:\b|_)'
-                    if re.search(pattern, basename):
-                        score = max(score, 0.95)
                 elif query_lower == ext[1:] or (query_lower.startswith('.') and query_lower == ext):
                     score = 0.9
                 
                 all_results_dict[path] = {"file_id": fid, "path": path, "score": score}
             
-            # Process AI Results
-            base_threshold = 0.45 if len(query_lower) > 3 else 0.6
-            for r in semantic_results:
-                path = r["path"]
-                ai_score = r["score"]
-                if ai_score >= base_threshold:
-                    if path in all_results_dict:
-                        all_results_dict[path]["score"] = max(all_results_dict[path]["score"], ai_score)
-                    else:
-                        all_results_dict[path] = {
-                            "file_id": r["file_id"], "path": path, "score": ai_score * 0.85
-                        }
+            # --- 3. Multi-Query Semantic Search (Expansion) ---
+            # Threshold: Adjusted for a balance of flexibility and precision
+            base_threshold = 0.35 if len(query_lower) > 3 else 0.5
+            
+            for q in expanded_queries:
+                semantic_results = searcher.search(q, top_k=15)
+                
+                # Queries that are expansions get a slight penalty to avoid noise
+                expansion_multiplier = 1.0 if q == query else 0.9
+                
+                for r in semantic_results:
+                    path = r["path"]
+                    ai_score = r["score"] * expansion_multiplier
+                    
+                    if ai_score >= base_threshold:
+                        if path in all_results_dict:
+                            # If we have both keyword and AI, the AI can boost the score
+                            all_results_dict[path]["score"] = max(all_results_dict[path]["score"], ai_score)
+                        else:
+                            all_results_dict[path] = {
+                                "file_id": r["file_id"], "path": path, "score": ai_score
+                            }
             
             results = list(all_results_dict.values())
             results.sort(key=lambda x: x['score'], reverse=True)
-            self.after(0, self._update_search_results, results[:20], request_id)
+            self.after(0, self._update_search_results, results[:25], request_id)
             
         except Exception as e:
             logging.error(f"Search error: {e}")
@@ -503,47 +540,97 @@ class ModernFileManager(ctk.CTk):
             messagebox.showerror("Error", f"Failed to open folder: {e}")
 
     def show_context_menu(self, file_path, x, y):
-        """Show right-click context menu for a file"""
+        """Show right-click context menu with aligned icons"""
         if self.active_context_menu and self.active_context_menu.winfo_exists():
             self.active_context_menu.destroy()
             
         menu = ctk.CTkToplevel(self)
         self.active_context_menu = menu
         menu.overrideredirect(True)
-        menu.geometry(f"+{x}+{y}")
+        menu.withdraw() # Hide until positioned to avoid flicker
         menu.configure(fg_color=SURFACE_CONTAINER)
         
         menu_items = [
-            ("📄 Open File", lambda: self.open_existing_file(file_path)),
-            ("📁 Open Folder", lambda: self.open_containing_folder(file_path)),
-            ("───", None),
-            ("🏷️ Move to Category", lambda: self.move_to_category_dialog(file_path)),
-            ("🔄 Refresh This File", lambda: self.reindex_single_file(file_path)),
-            ("📋 Copy Path", lambda: self.copy_file_path(file_path)),
-            ("───", None),
-            ("🗑️ Remove from App", lambda: self.delete_file(file_path)),
+            ("📄", "Open File", lambda: self.open_existing_file(file_path)),
+            ("📁", "Open Folder", lambda: self.open_containing_folder(file_path)),
+            ("───", "", None),
+            ("🏷️", "Move to Category", lambda: self.move_to_category_dialog(file_path)),
+            ("🔄", "Refresh This File", lambda: self.reindex_single_file(file_path)),
+            ("📋", "Copy Path", lambda: self.copy_file_path(file_path)),
+            ("───", "", None),
+            ("🗑️", "Remove from App", lambda: self.delete_file(file_path)),
         ]
         
-        for text, command in menu_items:
-            if text.startswith("───"):
+        for icon, text, command in menu_items:
+            if icon == "───":
                 separator = ctk.CTkFrame(menu, height=1, fg_color=OUTLINE)
-                separator.pack(fill="x", padx=5, pady=2)
+                separator.pack(fill="x", padx=10, pady=4)
             else:
                 btn = ctk.CTkButton(
-                    menu, text=text,
+                    menu, text=f"{icon}   {text}",
                     command=lambda cmd=command, m=menu: (cmd(), m.destroy()),
                     fg_color="transparent", hover_color=SURFACE_CONTAINER_HIGH,
-                    anchor="w", height=30, font=BODY_FONT
+                    anchor="w", height=34, font=BODY_FONT, padx=15
                 )
-                btn.pack(fill="x", padx=5, pady=1)
+                btn.pack(fill="x", padx=2, pady=1)
         
-        menu.bind("<FocusOut>", lambda e: menu.destroy())
+        # Focus handling to prevent glitches
+        menu.bind("<FocusOut>", lambda e: self.after(100, lambda: self._check_menu_focus(menu)))
+        menu.attributes("-topmost", True)
+        
+        # Position and show
+        self.after(10, lambda: self._position_menu(menu, x, y))
+
+    def _check_menu_focus(self, menu):
+        """Close menu if focus is lost to another window"""
+        if not menu.winfo_exists(): return
+        focus = self.focus_get()
+        if focus is None or not str(focus).startswith(str(menu)):
+            menu.destroy()
+            if self.active_context_menu == menu:
+                self.active_context_menu = None
+
+    def _position_menu(self, menu, x, y):
+        """Position menu within screen bounds and show it"""
+        if not menu.winfo_exists(): return
+        menu.update_idletasks()
+        w, h = menu.winfo_width(), menu.winfo_height()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        
+        # Adjust if off-screen
+        if x + w > sw: x = sw - w - 10
+        if y + h > sh: y = sh - h - 10
+        if x < 0: x = 10
+        if y < 0: y = 10
+        
+        menu.geometry(f"+{x}+{y}")
+        menu.deiconify()
         menu.focus_set()
-        menu.grab_set()
+
+    def _center_dialog(self, dialog):
+        """Center a ctk dialog on the main window"""
+        self.update_idletasks()
+        
+        # Approximate size of CTkInputDialog
+        d_width = 400
+        d_height = 200
+        
+        # Main window dimensions
+        m_width = self.winfo_width()
+        m_height = self.winfo_height()
+        m_x = self.winfo_x()
+        m_y = self.winfo_y()
+        
+        # Calculate center
+        x = m_x + (m_width // 2) - (d_width // 2)
+        y = m_y + (m_height // 2) - (d_height // 2)
+        
+        dialog.geometry(f"{d_width}x{d_height}+{x}+{y}")
 
     def rename_cluster_dialog(self, old_label):
         """Show dialog to rename a cluster"""
         dialog = ctk.CTkInputDialog(text=f"Rename category '{old_label}' to:", title="Rename Category")
+        self._center_dialog(dialog)
         new_label = dialog.get_input()
         if new_label and new_label != old_label:
             self.rename_cluster(old_label, new_label)
@@ -592,6 +679,7 @@ class ModernFileManager(ctk.CTk):
         
         # Simple input dialog for now (can be improved to a dropdown)
         dialog = ctk.CTkInputDialog(text="Enter category name:", title="Move to Category")
+        self._center_dialog(dialog)
         category_name = dialog.get_input()
         
         if category_name:
@@ -634,6 +722,9 @@ class ModernFileManager(ctk.CTk):
             
             conn.commit()
             conn.close()
+            
+            logging.info(f"Successfully moved file {file_id} to category '{category_name}'")
+            messagebox.showinfo("Success", f"File moved to '{category_name}'")
             
             self.status_label.configure(text=f"Moved to '{category_name}'")
             if self.current_view == "clusters":

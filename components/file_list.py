@@ -30,10 +30,10 @@ class FileList(ctk.CTkFrame):
         headers_frame._is_header = True
         
         headers = [
-            ("Name", 0.5),
-            ("Type", 0.15),
+            ("Name", 0.45),
+            ("Type", 0.1),
             ("Last Opened", 0.2),
-            ("Actions", 0.15)
+            ("Actions", 0.25)
         ]
         
         for header_text, width_ratio in headers:
@@ -104,6 +104,62 @@ class FileList(ctk.CTkFrame):
         def on_right_click(e):
             self.app.show_context_menu(path, e.x_root, e.y_root)
 
+        # --- DRAG AND DROP HANDLERS ---
+        def on_drag_start(e):
+            if self.app.current_view != "clusters": return
+            self.app.drag_data["path"] = path
+            # Create a ghost label that follows the mouse
+            ghost = ctk.CTkToplevel(self.app)
+            ghost.overrideredirect(True)
+            ghost.attributes("-alpha", 0.7)
+            ghost.attributes("-topmost", True)
+            self.app.drag_data["ghost"] = ghost
+            
+            lbl = ctk.CTkLabel(ghost, text=f"📦 {name}", fg_color=PRIMARY, text_color=ON_PRIMARY, corner_radius=5, padx=10, pady=5)
+            lbl.pack()
+            update_ghost(e)
+
+        def update_ghost(e):
+            if self.app.drag_data["ghost"]:
+                self.app.drag_data["ghost"].geometry(f"+{e.x_root+10}+{e.y_root+10}")
+
+        def on_drag_motion(e):
+            if self.app.drag_data["path"]:
+                update_ghost(e)
+
+        def on_drag_stop(e):
+            # Cancel any pending drag start
+            if hasattr(self.app, "_drag_timer") and self.app._drag_timer:
+                row.after_cancel(self.app._drag_timer)
+                self.app._drag_timer = None
+
+            if not self.app.drag_data["path"]: return
+            
+            # Find what's under the mouse
+            target_widget = self.app.winfo_containing(e.x_root, e.y_root)
+            
+            # Clean up ghost
+            if self.app.drag_data["ghost"]:
+                self.app.drag_data["ghost"].destroy()
+                self.app.drag_data["ghost"] = None
+            
+            # Find if we dropped on a cluster header
+            current = target_widget
+            found_cluster = None
+            while current:
+                if hasattr(current, "_cluster_label"):
+                    found_cluster = current._cluster_label
+                    break
+                try:
+                    current = current.master
+                except:
+                    break
+            
+            if found_cluster:
+                self.app.move_file_to_category(self.app.drag_data["path"], found_cluster)
+            
+            self.app.drag_data["path"] = None
+
         # Icon + Name
         ext = os.path.splitext(path)[1].lower()
         icon = FILE_ICONS.get(ext, FILE_ICONS["default"])
@@ -127,7 +183,7 @@ class FileList(ctk.CTkFrame):
             text_color=TEXT_SECONDARY,
             anchor="w"
         )
-        type_label.place(relx=0.5, rely=0.5, anchor="w", relwidth=0.15)
+        type_label.place(relx=0.5, rely=0.5, anchor="w", relwidth=0.1)
         
         # Last Opened
         time_text = self.format_time(last_opened) if last_opened else "Recently"
@@ -138,8 +194,19 @@ class FileList(ctk.CTkFrame):
             text_color=TEXT_SECONDARY,
             anchor="w"
         )
-        time_label.place(relx=0.65, rely=0.5, anchor="w", relwidth=0.2)
+        time_label.place(relx=0.6, rely=0.5, anchor="w", relwidth=0.2)
         
+        # Move to category button (only in clusters view)
+        if self.app.current_view == "clusters":
+            move_btn = ctk.CTkButton(
+                row, text="🏷️",
+                command=lambda p=path: self.app.move_to_category_dialog(p),
+                width=35, height=35, fg_color="transparent",
+                hover_color=PRIMARY, text_color=PRIMARY,
+                font=("Segoe UI", 14)
+            )
+            move_btn.place(relx=0.81, rely=0.5, anchor="w")
+
         # Open folder button
         folder_btn = ctk.CTkButton(
             row, text="📁",
@@ -147,7 +214,7 @@ class FileList(ctk.CTkFrame):
             width=30, height=30, fg_color="transparent",
             hover_color=SURFACE_CONTAINER_HIGH, font=BODY_FONT
         )
-        folder_btn.place(relx=0.85, rely=0.5, anchor="w")
+        folder_btn.place(relx=0.87, rely=0.5, anchor="w")
         
         # Delete button
         delete_btn = ctk.CTkButton(
@@ -156,7 +223,7 @@ class FileList(ctk.CTkFrame):
             width=30, height=30, fg_color="transparent",
             hover_color=ERROR, font=BODY_FONT
         )
-        delete_btn.place(relx=0.91, rely=0.5, anchor="w")
+        delete_btn.place(relx=0.93, rely=0.5, anchor="w")
 
         # --- EVENT BINDINGS ---
         interactive_widgets = [row, name_label, type_label, time_label]
@@ -167,6 +234,12 @@ class FileList(ctk.CTkFrame):
             w.bind("<Button-1>", on_click)
             w.bind("<Button-3>", on_right_click)
             w.bind("<Button-2>", on_right_click)
+            
+            # Drag and drop bindings
+            w.bind("<B1-Motion>", on_drag_motion)
+            w.bind("<ButtonRelease-1>", on_drag_stop)
+            # Long press or movement to start drag
+            w.bind("<ButtonPress-1>", lambda e: setattr(self.app, "_drag_timer", row.after(200, lambda: on_drag_start(e) if not self.app.drag_data["path"] else None)))
             
         # Double click to open
         row.bind("<Double-Button-1>", lambda e: self.app.open_existing_file(path))
@@ -183,6 +256,7 @@ class FileList(ctk.CTkFrame):
         )
         header.pack(fill="x", padx=10, pady=(10, 5))
         header.pack_propagate(False)
+        header._cluster_label = cluster_label # Tag for drag-and-drop
         
         label = ctk.CTkLabel(
             header,
@@ -192,6 +266,7 @@ class FileList(ctk.CTkFrame):
             anchor="w"
         )
         label.pack(side="left", padx=15, pady=10)
+        label._cluster_label = cluster_label # Tag for drag-and-drop
 
         # Rename button
         rename_btn = ctk.CTkButton(

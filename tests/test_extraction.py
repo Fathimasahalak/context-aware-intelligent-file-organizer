@@ -6,7 +6,7 @@ import os
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.text_extractor import extract_text_from_pdf, clean_filename_text, get_searchable_text
+from core.text_extractor import extract_text_from_pdf, clean_filename_text, get_searchable_text, extract_text_from_xlsx
 from config import MAX_PDF_PAGES
 
 class TestTextExtractor(unittest.TestCase):
@@ -14,6 +14,27 @@ class TestTextExtractor(unittest.TestCase):
     def test_clean_filename(self):
         self.assertEqual(clean_filename_text("My_Resume_2024.pdf"), "my resume 2024")
         self.assertEqual(clean_filename_text("Data-Analysis-Report.docx"), "data analysis report")
+
+    @patch('zipfile.ZipFile')
+    def test_excel_extraction(self, mock_zip):
+        import io
+        shared_strings_xml = b'<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>Shared</t></si></sst>'
+        sheet1_xml = b'<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c t="inlineStr"><is><t>Inline</t></is></c><c><v>123</v></c></row></sheetData></worksheet>'
+        
+        mock_instance = mock_zip.return_value.__enter__.return_value
+        mock_instance.namelist.return_value = ['xl/sharedStrings.xml', 'xl/worksheets/sheet1.xml']
+        
+        def open_side_effect(name, mode='r'):
+            if name == 'xl/sharedStrings.xml': return io.BytesIO(shared_strings_xml)
+            if name == 'xl/worksheets/sheet1.xml': return io.BytesIO(sheet1_xml)
+            return io.BytesIO(b"")
+            
+        mock_instance.open.side_effect = open_side_effect
+        
+        text = extract_text_from_xlsx("test.xlsx")
+        self.assertIn("Shared", text)
+        self.assertIn("Inline", text)
+        self.assertIn("123", text)
 
     @patch('pdfplumber.open')
     def test_pdf_page_limit(self, mock_open):

@@ -71,7 +71,8 @@ def init_db(db_path=None):
         "cluster_id": "INTEGER",
         "cluster_label": "TEXT",
         "is_manual_label": "INTEGER DEFAULT 0",
-        "searchable_text": "TEXT"
+        "searchable_text": "TEXT",
+        "filename_vector": "BLOB"
     }
     
     for col_name, col_type in required_columns.items():

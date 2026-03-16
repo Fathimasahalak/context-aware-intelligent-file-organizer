@@ -24,6 +24,7 @@ import os
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.dirname(_script_dir)
 EMBEDDING_CACHE = os.path.join(_project_root, "data", "file_embeddings.npy")
+FILENAME_EMBEDDING_CACHE = os.path.join(_project_root, "data", "filename_embeddings.npy")
 ID_CACHE = os.path.join(_project_root, "data", "file_ids.npy")
 
 MAX_CACHE_FILES = 10000 # Increased for better scalability
@@ -35,7 +36,9 @@ class SemanticSearch:
         self.file_ids = []
         self.file_paths = []
         self.vectors = None
+        self.name_vectors = None
         self.db_path = db_path or DB_PATH
+        self._load_lock = threading.Lock()
 
     def load_model(self):
         global _shared_model
@@ -76,115 +79,136 @@ class SemanticSearch:
 
     def load_files(self, force_rebuild=False):
         """Sync database files with the semantic vector cache efficiently."""
-        from core.database import get_connection
-        
-        # 1. Load DB state (Lightweight)
-        conn = get_connection(self.db_path)
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT id, path FROM files ORDER BY id ASC")
-            db_rows = cur.fetchall()
-        finally:
-            conn.close()
-
-        if not db_rows:
-            self.file_ids = []
-            self.file_paths = []
-            self.vectors = np.array([])
-            self.save_cache()
-            return
-
-        db_id_map = {row[0]: row[1] for row in db_rows}
-        db_ids = set(db_id_map.keys())
-
-        # 2. Load Cache
-        cached_ids = []
-        cached_vectors = None
-        
-        if not force_rebuild and os.path.exists(ID_CACHE) and os.path.exists(EMBEDDING_CACHE):
-            try:
-                cached_ids = np.load(ID_CACHE).tolist()
-                cached_vectors = np.load(EMBEDDING_CACHE)
-                
-                # Validation
-                if len(cached_ids) != len(cached_vectors):
-                    logging.warning("Cache size mismatch. Rebuilding.")
-                    cached_ids = []
-                    cached_vectors = None
-            except Exception as e:
-                logging.warning(f"Cache corrupt: {e}")
-                cached_ids = []
-
-        # 3. Identify Changes
-        cached_id_set = set(cached_ids)
-        
-        # A. Deletions (In cache but not in DB)
-        ids_to_remove = cached_id_set - db_ids
-        if ids_to_remove:
-            logging.info(f"Removing {len(ids_to_remove)} obsolete files from index...")
-            indices_to_keep = [i for i, fid in enumerate(cached_ids) if fid in db_ids]
+        with self._load_lock:
+            from core.database import get_connection
             
-            if cached_vectors is not None:
-                cached_vectors = cached_vectors[indices_to_keep]
-            cached_ids = [cached_ids[i] for i in indices_to_keep]
-
-        # B. Additions (In DB but not in cache)
-        ids_to_add = list(db_ids - set(cached_ids))
-        if ids_to_add:
-            logging.info(f"Indexing {len(ids_to_add)} new files...")
-            
-            # Batch fetch text for new files only
+            # 1. Load DB state (Lightweight)
             conn = get_connection(self.db_path)
             cur = conn.cursor()
-            
-            # Split into chunks to avoid too many SQL variables
-            chunk_size = 900
-            new_vectors_list = []
-            
-            model = self.get_model()
-            if not model:
-                logging.error("Model unavailable. Skipping indexing.")
+            try:
+                cur.execute("SELECT id, path FROM files ORDER BY id ASC")
+                db_rows = cur.fetchall()
+            finally:
+                conn.close()
+
+            if not db_rows:
+                self.file_ids = []
+                self.file_paths = []
+                self.vectors = np.array([])
+                self.name_vectors = np.array([])
+                self.save_cache()
                 return
 
-            for i in range(0, len(ids_to_add), chunk_size):
-                chunk_ids = ids_to_add[i:i + chunk_size]
-                placeholders = ',' .join('?' * len(chunk_ids))
-                cur.execute(f"SELECT id, path, searchable_text FROM files WHERE id IN ({placeholders})", chunk_ids)
-                new_rows = cur.fetchall()
-                
-                texts_to_encode = []
-                for _, path, text in new_rows:
-                    content = text if (text and text.strip()) else os.path.basename(path)
-                    texts_to_encode.append(content)
-                
-                if texts_to_encode:
-                    vectors = model.encode(texts_to_encode, show_progress_bar=True)
-                    new_vectors_list.append(vectors)
+            db_id_map = {row[0]: row[1] for row in db_rows}
+            db_ids = set(db_id_map.keys())
+
+            # 2. Load Cache
+            cached_ids = []
+            cached_vectors = None
+            cached_name_vectors = None
             
-            conn.close()
+            if not force_rebuild and os.path.exists(ID_CACHE) and os.path.exists(EMBEDDING_CACHE):
+                try:
+                    cached_ids = np.load(ID_CACHE).tolist()
+                    cached_vectors = np.load(EMBEDDING_CACHE)
+                    if os.path.exists(FILENAME_EMBEDDING_CACHE):
+                        cached_name_vectors = np.load(FILENAME_EMBEDDING_CACHE)
+                    
+                    # Validation
+                    if len(cached_ids) != len(cached_vectors):
+                        logging.warning("Cache size mismatch. Rebuilding.")
+                        cached_ids = []
+                        cached_vectors = None
+                        cached_name_vectors = None
+                except Exception as e:
+                    logging.warning(f"Cache corrupt: {e}")
+                    cached_ids = []
+
+            # 3. Identify Changes
+            cached_id_set = set(cached_ids)
             
-            if new_vectors_list:
-                new_vectors = np.concatenate(new_vectors_list, axis=0)
-                if cached_vectors is None or len(cached_vectors) == 0:
-                    cached_vectors = new_vectors
-                else:
-                    cached_vectors = np.concatenate([cached_vectors, new_vectors], axis=0)
+            # A. Deletions (In cache but not in DB)
+            ids_to_remove = cached_id_set - db_ids
+            if ids_to_remove:
+                logging.info(f"Removing {len(ids_to_remove)} obsolete files from index...")
+                indices_to_keep = [i for i, fid in enumerate(cached_ids) if fid in db_ids]
                 
+                if cached_vectors is not None:
+                    cached_vectors = cached_vectors[indices_to_keep]
+                if cached_name_vectors is not None:
+                    cached_name_vectors = cached_name_vectors[indices_to_keep]
+                cached_ids = [cached_ids[i] for i in indices_to_keep]
+
+            # B. Additions (In DB but not in cache)
+            ids_to_add = list(db_ids - set(cached_ids))
+            if ids_to_add:
+                logging.info(f"Indexing {len(ids_to_add)} new files...")
+                
+                # Batch fetch text for new files only
+                conn = get_connection(self.db_path)
+                cur = conn.cursor()
+                
+                # Split into chunks to avoid too many SQL variables
+                chunk_size = 900
+                
+                model = self.get_model()
+                if not model:
+                    logging.error("Model unavailable. Skipping indexing.")
+                    return
+
+                for i in range(0, len(ids_to_add), chunk_size):
+                    chunk_ids = ids_to_add[i:i + chunk_size]
+                    placeholders = ',' .join('?' * len(chunk_ids))
+                    cur.execute(f"SELECT id, path, searchable_text FROM files WHERE id IN ({placeholders})", chunk_ids)
+                    new_rows = cur.fetchall()
+                    
+                    # Use a dictionary to maintain DB order
+                    row_map = {row[0]: row for row in new_rows}
+                    
+                    texts_to_encode = []
+                    names_to_encode = []
+                    for fid in chunk_ids:
+                        if fid not in row_map: continue
+                        fid, path, text = row_map[fid]
+                        filename = os.path.basename(path)
+                        name_no_ext = os.path.splitext(filename)[0].replace('_', ' ').replace('-', ' ')
+                        
+                        names_to_encode.append(name_no_ext)
+                        texts_to_encode.append(text if (text and text.strip()) else name_no_ext)
+                    
+                    if names_to_encode:
+                        name_vectors = model.encode(names_to_encode, show_progress_bar=True)
+                        if cached_name_vectors is None or len(cached_name_vectors) == 0:
+                            cached_name_vectors = name_vectors
+                        else:
+                            cached_name_vectors = np.concatenate([cached_name_vectors, name_vectors], axis=0)
+                    
+                    if texts_to_encode:
+                        vectors = model.encode(texts_to_encode, show_progress_bar=True)
+                        if cached_vectors is None or len(cached_vectors) == 0:
+                            cached_vectors = vectors
+                        else:
+                            cached_vectors = np.concatenate([cached_vectors, vectors], axis=0)
+                
+                conn.close()
                 cached_ids.extend(ids_to_add)
 
-        # 4. Update Memory & Cache
-        self.file_ids = cached_ids
-        # Reconstruct paths list in correct order corresponding to IDs
-        self.file_paths = [db_id_map[fid] for fid in self.file_ids]
-        self.vectors = cached_vectors if cached_vectors is not None else np.array([])
-        
-        self.save_cache()
-        logging.info(f"Search index synced. Total: {len(self.file_ids)}")
+            # 4. Update Memory & Cache
+            self.file_ids = cached_ids
+            # Reconstruct paths list in correct order corresponding to IDs
+            self.file_paths = [db_id_map.get(fid, "UNKNOWN") for fid in self.file_ids]
+            self.vectors = cached_vectors if cached_vectors is not None else np.array([])
+            self.name_vectors = cached_name_vectors if cached_name_vectors is not None else np.array([])
+            
+            self.save_cache()
+            logging.info(f"Search index synced. Total: {len(self.file_ids)}")
+
 
 
     def save_cache(self):
         np.save(ID_CACHE, np.array(self.file_ids))
         np.save(EMBEDDING_CACHE, self.vectors)
+        np.save(FILENAME_EMBEDDING_CACHE, self.name_vectors)
 
     def search(self, query, top_k=10):
         if self.vectors is None or len(self.file_ids) == 0:
@@ -204,7 +228,23 @@ class SemanticSearch:
         if len(self.vectors.shape) == 1:
             return []
         
-        similarities = cosine_similarity(query_vec, self.vectors)[0]
+        # Calculate similarities for both content and filename
+        body_sims = cosine_similarity(query_vec, self.vectors)[0]
+        
+        if self.name_vectors is not None and len(self.name_vectors) == len(self.vectors):
+            name_sims = cosine_similarity(query_vec, self.name_vectors)[0]
+            
+            # --- Improved Combination Logic ---
+            # 1. Start with a balanced weighted average
+            # (Increase body weight to 0.5 to respect "overall contents" more)
+            weighted_sims = (name_sims * 0.5) + (body_sims * 0.5)
+            
+            # 2. Use np.maximum to ensure that if EITHER the name OR the content 
+            # is an extremely strong match, we don't penalize it by averaging with a weak match.
+            # We use a slight multiplier (0.95) on the max to keep pure matches very high.
+            similarities = np.maximum(weighted_sims, np.maximum(name_sims, body_sims) * 0.95)
+        else:
+            similarities = body_sims
 
         top_indices = np.argsort(similarities)[::-1][:top_k]
 
@@ -242,6 +282,8 @@ class SemanticSearch:
             # Remove from vectors
             if self.vectors is not None and len(self.vectors) > idx:
                 self.vectors = np.delete(self.vectors, idx, axis=0)
+            if self.name_vectors is not None and len(self.name_vectors) > idx:
+                self.name_vectors = np.delete(self.name_vectors, idx, axis=0)
                 
             # Update cache on disk
             self.save_cache()

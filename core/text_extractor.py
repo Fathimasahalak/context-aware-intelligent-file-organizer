@@ -54,19 +54,37 @@ def extract_text_from_docx(path):
 
 def extract_text_from_xlsx(path):
     try:
+        text_parts = []
         with zipfile.ZipFile(path, 'r') as zf:
-            # Excel stores text in sharedStrings.xml
-            if 'xl/sharedStrings.xml' in zf.namelist():
+            files = zf.namelist()
+            
+            # 1. Extract from sharedStrings.xml (Unique strings)
+            if 'xl/sharedStrings.xml' in files:
                 with zf.open('xl/sharedStrings.xml') as f:
                     tree = ET.parse(f)
-                    root = tree.getroot()
-                    # Find all text elements
-                    text_parts = []
-                    for node in root.iter():
+                    for node in tree.getroot().iter():
                         if node.tag.endswith('}t') and node.text:
                             text_parts.append(node.text)
-                    return ' '.join(text_parts)
-            return ""
+            
+            # 2. Extract from worksheets (Numbers and Inline Strings)
+            sheet_files = [f for f in files if f.startswith('xl/worksheets/sheet') and f.endswith('.xml')]
+            for sheet_file in sheet_files:
+                with zf.open(sheet_file) as f:
+                    tree = ET.parse(f)
+                    root = tree.getroot()
+                    # Namespaces in Excel XML can be tricky, so we use endswith
+                    for cell in root.iter():
+                        if cell.tag.endswith('}c'):
+                            cell_type = cell.get('t')
+                            # If it's NOT a shared string, extract the value
+                            if cell_type != 's':
+                                for child in cell.iter():
+                                    if child.tag.endswith('}v') and child.text:
+                                        text_parts.append(child.text)
+                                    if child.tag.endswith('}t') and child.text:
+                                        text_parts.append(child.text)
+            
+        return ' '.join(text_parts)
     except Exception as e:
         logging.error(f"Error reading xlsx {path}: {e}")
         return ""

@@ -160,11 +160,19 @@ def run_filename_clustering(k=None, db_path=DB_PATH):
             update_data.append((cid, label, f["id"]))
 
     if update_data:
+        # 1. Update cluster_id for ALL files (manual or not) to keep them in sync with AI clusters
         cur.executemany("""
             UPDATE files 
-            SET cluster_id = ?, cluster_label = ? 
+            SET cluster_id = ?
+            WHERE id = ?
+        """, [(d[0], d[2]) for d in update_data])
+        
+        # 2. Update cluster_label ONLY for files that don't have a manual label
+        cur.executemany("""
+            UPDATE files 
+            SET cluster_label = ? 
             WHERE id = ? AND is_manual_label = 0
-        """, update_data)
+        """, [(d[1], d[2]) for d in update_data])
         conn.commit()
 
     conn.close()

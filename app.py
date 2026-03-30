@@ -13,7 +13,7 @@ from core.database import init_db, get_connection
 from core.logger import start_file_session, end_file_session, remove_file_session
 from ml.filename_cluster import run_filename_clustering
 from ml.recommendation import get_smart_priority_files
-from config import DB_PATH
+from config import DB_PATH, LOG_DIR
 from theme import *
 from utils.path_utils import open_path, normalize_path
 
@@ -23,11 +23,10 @@ from components.toolbar import Toolbar
 from components.file_list import FileList
 
 # Configure logging to logs directory
-os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO, 
     format='%(asctime)s - %(levelname)s - %(message)s', 
-    filename=os.path.join('logs', 'file_organizer.log')
+    filename=os.path.join(LOG_DIR, 'file_organizer.log')
 )
 
 ctk.set_appearance_mode("dark")
@@ -751,7 +750,7 @@ class ModernFileManager(ctk.CTk):
             cur.execute("INSERT OR IGNORE INTO user_categories (name) VALUES (?)", (category_name,))
             
             # 5. Trigger fingerprint update
-            from ml.filename_cluster import update_category_fingerprint
+            from ml.category_learning import update_category_fingerprint
             threading.Thread(target=update_category_fingerprint, args=(category_name,), daemon=True).start()
             
             conn.commit()

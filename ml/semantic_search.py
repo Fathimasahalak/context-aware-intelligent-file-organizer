@@ -19,13 +19,11 @@ _shared_searcher = None
 _searcher_lock = threading.Lock()
 
 
-from config import DB_PATH
+from config import DB_PATH, DATA_DIR
 import os
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(_script_dir)
-EMBEDDING_CACHE = os.path.join(_project_root, "data", "file_embeddings.npy")
-FILENAME_EMBEDDING_CACHE = os.path.join(_project_root, "data", "filename_embeddings.npy")
-ID_CACHE = os.path.join(_project_root, "data", "file_ids.npy")
+EMBEDDING_CACHE = os.path.join(DATA_DIR, "file_embeddings.npy")
+FILENAME_EMBEDDING_CACHE = os.path.join(DATA_DIR, "filename_embeddings.npy")
+ID_CACHE = os.path.join(DATA_DIR, "file_ids.npy")
 
 MAX_CACHE_FILES = 10000 # Increased for better scalability
 

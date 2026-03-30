@@ -82,9 +82,12 @@ class FileList(ctk.CTkFrame):
 
         render_batch(0)
 
-    def create_file_row(self, file_data, last_opened=None):
+    def create_file_row(self, file_data, last_opened=None, parent=None):
         """Create a file row in the list"""
         path = file_data["path"]
+        
+        # Use provided parent or default to scrollable_frame
+        target_parent = parent if parent else self.scrollable_frame
         
         # Determine selection color
         is_selected = path in self.app.selected_files
@@ -92,7 +95,7 @@ class FileList(ctk.CTkFrame):
         
         # File row container
         row = ctk.CTkFrame(
-            self.scrollable_frame,
+            target_parent,
             fg_color=fg_color,
             height=50,
             corner_radius=RADIUS_SM
@@ -279,10 +282,15 @@ class FileList(ctk.CTkFrame):
         name_label.bind("<Double-Button-1>", lambda e: self.app.open_existing_file(path))
 
     def create_cluster_section(self, cluster_label, count, added_paths):
-        """Create a cluster section"""
+        """Create a cluster section wrapped in a container for better interaction"""
+        # Section container
+        section = ctk.CTkFrame(self.scrollable_frame, fg_color="transparent")
+        section.pack(fill="x", padx=0, pady=0)
+        section._cluster_label = cluster_label # Tag the whole section
+        
         # Cluster header
         header = ctk.CTkFrame(
-            self.scrollable_frame,
+            section,
             fg_color=SURFACE_CONTAINER,
             height=45,
             corner_radius=RADIUS_SM
@@ -343,15 +351,14 @@ class FileList(ctk.CTkFrame):
                     "score": count / 10.0,
                     "reasons": {}
                 }
-                # Lazy load individual files within clusters if needed, but for now 
-                # we just ensure we don't block the main thread by using small batches
-                self.create_file_row(file_data, last_opened)
+                # Create row inside the section container
+                self.create_file_row(file_data, last_opened, parent=section)
                 added_paths.add(norm_path)
 
         # Add "View All" button if there are many files
         if count > 10:
             view_all_btn = ctk.CTkButton(
-                self.scrollable_frame,
+                section,
                 text=f"View all {count} files in {cluster_label} →",
                 command=lambda l=cluster_label: self.app.load_cluster_full(l),
                 fg_color="transparent",

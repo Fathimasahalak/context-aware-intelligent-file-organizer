@@ -9,10 +9,10 @@ from config import DB_PATH
 from ml.semantic_search import get_semantic_searcher
 from core.database import get_connection
 
-# Updated weights (balanced)
-W_RECENCY = 0.30
-W_FREQ = 0.35
-W_CONTEXT = 0.25
+# Weights for the hybrid score - Frequency as the primary driver
+W_FREQ = 0.60
+W_RECENCY = 0.20
+W_CONTEXT = 0.10
 W_CLUSTER = 0.10
 
 

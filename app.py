@@ -86,6 +86,18 @@ class ModernFileManager(ctk.CTk):
         
         # Start smart background indexing
         threading.Thread(target=self._smart_background_sync, daemon=True).start()
+        
+        # Start auto-refresh for Smart Priority (every 30 seconds)
+        self._setup_auto_refresh()
+
+    def _setup_auto_refresh(self):
+        """Periodically refresh the current view if it's the Smart Priority view"""
+        if self.current_view == "smart" and not self.search_entry.get():
+            logging.debug("Auto-refreshing Smart Priority view")
+            self.load_view("smart")
+        
+        # Schedule next refresh in 30 seconds
+        self.after(30000, self._setup_auto_refresh)
 
     def on_closing(self):
         """Ensure the application and all threads exit cleanly"""
@@ -217,14 +229,10 @@ class ModernFileManager(ctk.CTk):
             self.file_list.show_empty_state("No files tracked yet. Add some files to get started!")
             return
         
-        added_paths = set()
-        for file_data in files:
-            norm_path = normalize_path(file_data["path"])
-            if norm_path not in added_paths:
-                self.file_list.create_file_row(file_data, file_data.get("last_opened"))
-                added_paths.add(norm_path)
+        # Use lazy rendering for performance
+        self.file_list.render_files_lazy(files)
         
-        self.file_count_label.configure(text=f"{len(added_paths)} files")
+        self.file_count_label.configure(text=f"{len(files)} files")
         self.status_label.configure(text="Smart priority loaded")
 
     def load_clusters(self, request_id):
@@ -274,6 +282,37 @@ class ModernFileManager(ctk.CTk):
         self.file_count_label.configure(text=f"{total_files} files in {len(clusters)} categories")
         self.status_label.configure(text="Categories loaded")
 
+    def load_cluster_full(self, cluster_label):
+        """Show all files in a specific cluster with lazy loading"""
+        self.view_request_id += 1
+        request_id = self.view_request_id
+        
+        self.toolbar.update_title(f"📁 Category: {cluster_label}")
+        self.file_list.show_loading_state(f"Loading files in {cluster_label}...")
+        
+        threading.Thread(target=self._load_cluster_full_async, args=(cluster_label, request_id), daemon=True).start()
+
+    def _load_cluster_full_async(self, cluster_label, request_id):
+        """Fetch all files for a cluster in background"""
+        try:
+            conn = get_connection(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT path, access_count, last_opened
+                FROM files
+                WHERE cluster_label = ?
+                ORDER BY last_opened DESC
+            """, (cluster_label,))
+            rows = cur.fetchall()
+            conn.close()
+            
+            if self.view_request_id == request_id:
+                self.after(0, self._display_all_files, rows, request_id)
+        except Exception as e:
+            logging.error(f"Error loading full cluster: {e}")
+            if self.view_request_id == request_id:
+                self.after(0, lambda: self.file_list.show_empty_state(f"Unable to load files for {cluster_label}."))
+
     def load_all_files(self, request_id):
         """Load all files"""
         self.file_list.show_loading_state("Loading all files...")
@@ -308,19 +347,10 @@ class ModernFileManager(ctk.CTk):
             self.file_list.show_empty_state("No files tracked yet. Add some files to get started!")
             return
         
-        added_paths = set()
-        for path, count, last_opened in rows:
-            norm_path = normalize_path(path)
-            if norm_path not in added_paths:
-                file_data = {
-                    "path": path,
-                    "score": count / 10.0,
-                    "reasons": {"Freq": str(count)}
-                }
-                self.file_list.create_file_row(file_data, last_opened)
-                added_paths.add(norm_path)
+        # Use lazy rendering
+        self.file_list.render_files_lazy(rows)
         
-        self.file_count_label.configure(text=f"{len(added_paths)} files")
+        self.file_count_label.configure(text=f"{len(rows)} files")
         self.status_label.configure(text="All files loaded")
 
     def perform_search(self):
@@ -443,16 +473,11 @@ class ModernFileManager(ctk.CTk):
             self.status_label.configure(text="No results")
             return
         
-        seen = set()
-        for result in results:
-            norm_path = normalize_path(result["path"])
-            if norm_path not in seen:
-                file_data = {"path": result["path"], "score": result["score"], "reasons": {}}
-                self.file_list.create_file_row(file_data)
-                seen.add(norm_path)
+        # Use lazy rendering for search results
+        self.file_list.render_files_lazy(results)
         
-        self.file_count_label.configure(text=f"{len(seen)} results")
-        self.status_label.configure(text=f"Found {len(seen)} results")
+        self.file_count_label.configure(text=f"{len(results)} results")
+        self.status_label.configure(text=f"Found {len(results)} results")
 
     def open_file(self):
         """Open file dialog to add a file"""
@@ -491,8 +516,8 @@ class ModernFileManager(ctk.CTk):
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO files(path, searchable_text, access_count, last_opened)
-                VALUES (?, ?, 1, datetime('now'))
-            """, (file_path, searchable_text))
+                VALUES (?, ?, 1, ?)
+            """, (file_path, searchable_text, datetime.now().isoformat()))
             conn.commit()
             conn.close()
             
@@ -506,13 +531,15 @@ class ModernFileManager(ctk.CTk):
         """Callback for successful file addition"""
         self.status_label.configure(text=f"Added: {os.path.basename(file_path)}")
         self.sidebar.add_btn.configure(state="normal")
-        self.needs_cluster_refresh = True
-        
-        if self.semantic_searcher:
-            threading.Thread(target=self.semantic_searcher.load_files, daemon=True).start()
-        
-        self.load_view(self.current_view)
 
+        # Trigger re-indexing AND clustering
+        if self.semantic_searcher:
+            def task():
+                self.semantic_searcher.load_files()
+                self._refresh_clusters()
+            threading.Thread(target=task, daemon=True).start()
+        else:
+            self._refresh_clusters()
     def open_existing_file(self, file_path):
         """Open an existing tracked file"""
         try:
@@ -521,9 +548,16 @@ class ModernFileManager(ctk.CTk):
                 messagebox.showerror("Error", f"File not found on disk:\n{file_path}")
                 return
             
+            # 1. Open file 
             open_path(file_path)
+            
+            # 2. Start session (This now handles updating last_opened and access_count immediately)
+            # Use a slight delay before UI refresh to ensure DB commit is visible
             threading.Thread(target=self.process_file_session, args=(file_path,), daemon=True).start()
+            
+            # 3. Refresh UI
             self.status_label.configure(text=f"Opened: {os.path.basename(file_path)}")
+            self.after(500, lambda: self.load_view(self.current_view))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open file: {e}")
 
@@ -652,14 +686,14 @@ class ModernFileManager(ctk.CTk):
             cur.execute("INSERT OR IGNORE INTO user_categories (name) VALUES (?)", (new_label,))
             
             # 3. Trigger fingerprint update in background
-            from ml.filename_cluster import update_category_fingerprint
+            from ml.category_learning import update_category_fingerprint
             threading.Thread(target=update_category_fingerprint, args=(new_label,), daemon=True).start()
             
             conn.commit()
             conn.close()
             
             self.status_label.configure(text=f"Renamed '{old_label}' to '{new_label}'")
-            self.switch_view("clusters") # Refresh view
+            self.load_view("clusters") # Update UI immediately
         except Exception as e:
             logging.error(f"Failed to rename cluster: {e}")
             messagebox.showerror("Error", f"Failed to rename: {e}")
@@ -727,8 +761,8 @@ class ModernFileManager(ctk.CTk):
             messagebox.showinfo("Success", f"File moved to '{category_name}'")
             
             self.status_label.configure(text=f"Moved to '{category_name}'")
-            if self.current_view == "clusters":
-                self.switch_view("clusters")
+            # Re-cluster similar files with the new learned data
+            self._refresh_clusters()
         except Exception as e:
             logging.error(f"Failed to move file: {e}")
             messagebox.showerror("Error", f"Failed to move: {e}")

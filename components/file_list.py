@@ -49,9 +49,38 @@ class FileList(ctk.CTkFrame):
 
     def clear(self):
         """Clear all rows but keep headers"""
+        # Cancel any pending rendering
+        if hasattr(self, "_render_job") and self._render_job:
+            self.app.after_cancel(self._render_job)
+            self._render_job = None
+            
         for widget in self.scrollable_frame.winfo_children():
             if not getattr(widget, '_is_header', False):
                 widget.destroy()
+
+    def render_files_lazy(self, files_data, batch_size=10):
+        """Render file rows in small batches to keep UI responsive"""
+        def render_batch(start_idx):
+            if start_idx >= len(files_data):
+                self._render_job = None
+                return
+
+            end_idx = min(start_idx + batch_size, len(files_data))
+            for i in range(start_idx, end_idx):
+                item = files_data[i]
+                # item can be a dict (from search/priority) or a tuple (from raw DB query)
+                if isinstance(item, dict):
+                    # For priority view, last_opened is in the dict
+                    self.create_file_row(item, item.get("last_opened"))
+                else:
+                    # Raw DB row: (path, count, last_opened)
+                    file_data = {"path": item[0], "score": item[1]/10.0, "reasons": {"Freq": str(item[1])}}
+                    self.create_file_row(file_data, item[2])
+
+            # Schedule next batch
+            self._render_job = self.app.after(10, lambda: render_batch(end_idx))
+
+        render_batch(0)
 
     def create_file_row(self, file_data, last_opened=None):
         """Create a file row in the list"""
@@ -293,7 +322,7 @@ class FileList(ctk.CTkFrame):
         )
         count_label.pack(side="right", padx=15, pady=10)
         
-        # Load files in this cluster
+        # Load files in this cluster (Limit to 10 for performance)
         conn = get_connection(DB_PATH)
         cur = conn.cursor()
         cur.execute("""
@@ -314,8 +343,24 @@ class FileList(ctk.CTkFrame):
                     "score": count / 10.0,
                     "reasons": {}
                 }
+                # Lazy load individual files within clusters if needed, but for now 
+                # we just ensure we don't block the main thread by using small batches
                 self.create_file_row(file_data, last_opened)
                 added_paths.add(norm_path)
+
+        # Add "View All" button if there are many files
+        if count > 10:
+            view_all_btn = ctk.CTkButton(
+                self.scrollable_frame,
+                text=f"View all {count} files in {cluster_label} →",
+                command=lambda l=cluster_label: self.app.load_cluster_full(l),
+                fg_color="transparent",
+                text_color=PRIMARY,
+                hover_color=SURFACE_CONTAINER_HIGH,
+                font=SMALL_FONT,
+                height=30
+            )
+            view_all_btn.pack(fill="x", padx=20, pady=5)
 
     def format_time(self, timestamp_str):
         """Format timestamp to exact date and time"""

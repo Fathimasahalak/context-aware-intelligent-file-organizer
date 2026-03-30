@@ -16,23 +16,32 @@ def start_file_session(file_path):
     cur.execute("SELECT id FROM files WHERE lower(path) = lower(?)", (file_path,))
     row = cur.fetchone()
 
+    now_str = datetime.now().isoformat()
     if row is None:
         # Note: searchable_text should be handled by the caller (app.py) 
         # to keep logger.py focused on session tracking
         cur.execute(
-            "INSERT INTO files(path, access_count, total_time, last_opened) VALUES (?,0,0,?)",
-            (file_path, datetime.now().isoformat())
+            "INSERT INTO files(path, access_count, total_time, last_opened) VALUES (?,1,0,?)",
+            (file_path, now_str)
         )
         file_id = cur.lastrowid
     else:
         file_id = row[0]
+        # UPDATE immediately when session starts for UI accuracy
+        cur.execute("""
+            UPDATE files 
+            SET last_opened = ?, 
+                access_count = access_count + 1 
+            WHERE id = ?
+        """, (now_str, file_id))
 
     conn.commit()
     conn.close()
 
     open_sessions[file_path] = {
         "file_id": file_id,
-        "start_time": time.time()
+        "start_time": time.time(),
+        "iso_start": now_str
     }
 
 
@@ -40,17 +49,11 @@ def end_file_session(file_path):
     file_path = os.path.normpath(os.path.abspath(file_path))
     
     if file_path not in open_sessions:
-        # Fallback: if no start was recorded, just log a quick access
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("UPDATE files SET access_count = access_count + 1, last_opened = ? WHERE lower(path) = lower(?)", 
-                   (datetime.now().isoformat(), file_path))
-        conn.commit()
-        conn.close()
         return
 
     session = open_sessions[file_path]
     start_time = session["start_time"]
+    iso_start = session["iso_start"]
     duration = max(1, int(time.time() - start_time))
     file_id = session["file_id"]
 
@@ -62,18 +65,17 @@ def end_file_session(file_path):
         VALUES (?, ?, ?, ?)
     """, (
         file_id,
-        datetime.fromtimestamp(start_time).isoformat(),
+        iso_start,
         datetime.now().isoformat(),
         duration
     ))
 
+    # Only update duration on close, access_count/last_opened were handled on start
     cur.execute("""
         UPDATE files
-        SET access_count = access_count + 1,
-            total_time = total_time + ?,
-            last_opened = ?
+        SET total_time = total_time + ?
         WHERE id = ?
-    """, (duration, datetime.now().isoformat(), file_id))
+    """, (duration, file_id))
 
     conn.commit()
     conn.close()
